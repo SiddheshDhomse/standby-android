@@ -530,7 +530,7 @@ public class SettingsActivity extends Activity {
                 + " · Music " + (NowPlaying.hasAccess(this) ? "✓" : "–")
                 + " · Photos " + (PhotoSlideshow.hasPermission(this) ? "✓" : "–"), 0xFF636366, R.drawable.ic_set_shield, PRIVACY));
         g.add(new Entry("Start automatically", "Screen saver while charging", 0xFF30D158, R.drawable.ic_set_bolt, AUTO));
-        g.add(new Entry("About", "Version 1.3 · security notes", 0xFF48484A, R.drawable.ic_set_info, ABOUT));
+        g.add(new Entry("About", "Version " + versionName() + " · check for updates", 0xFF48484A, R.drawable.ic_set_info, ABOUT));
         return g;
     }
 
@@ -1018,13 +1018,71 @@ public class SettingsActivity extends Activity {
     private void buildAbout() {
         buildHeader("About", true);
         section(null);
-        valueRow("Version", "1.3", () -> { });
+        valueRow("Version", versionName(), () -> { });
+        button("Check for updates", this::checkForUpdates);
         button("Show the welcome tips again", () -> {
             s.putBool("helpSeen", false);
             finish();
         });
         button("Security notes", () -> open(new Intent(Intent.ACTION_VIEW,
                 Uri.parse("https://github.com/SiddheshDhomse/standby-android/blob/main/SECURITY.md"))));
+        note("Updates install over this version (keeping your settings) as long as they are signed with the same key.");
+    }
+
+    private String versionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "?";
+        }
+    }
+
+    private long versionCode() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).getLongVersionCode();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private static final String RELEASE_API = "https://api.github.com/repos/SiddheshDhomse/standby-android/releases/latest";
+    private static final String APK_URL = "https://github.com/SiddheshDhomse/standby-android/releases/latest/download/StandBy.apk";
+
+    /** Asks GitHub for the latest release; if newer, offers to download it (Android checks the signature on install). */
+    private void checkForUpdates() {
+        Toast.makeText(this, "Checking\u2026", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            String tag = null;
+            try {
+                byte[] b = Net.get(RELEASE_API, 512 * 1024, new String[]{"api.github.com"}, "application/json");
+                tag = new org.json.JSONObject(new String(b, java.nio.charset.StandardCharsets.UTF_8)).optString("tag_name", null);
+            } catch (Exception ignored) {
+            }
+            final String latest = tag;
+            runOnUiThread(() -> {
+                if (latest == null) {
+                    Toast.makeText(this, "Couldn't reach GitHub", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                long latestBuild = -1;
+                try {
+                    latestBuild = Long.parseLong(latest.substring(latest.lastIndexOf('.') + 1));
+                } catch (Exception ignored) {
+                }
+                long myBuild = versionCode() - 100;
+                if (latestBuild > myBuild) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("Update available")
+                            .setMessage("StandBy " + latest + " is ready (you have " + versionName() + ").\n\n"
+                                    + "Download it, then tap the file to install. Your settings are kept.")
+                            .setPositiveButton("Download", (dlg, w) -> open(new Intent(Intent.ACTION_VIEW, Uri.parse(APK_URL))))
+                            .setNegativeButton("Later", null)
+                            .show();
+                } else {
+                    Toast.makeText(this, "You're up to date (" + versionName() + ")", Toast.LENGTH_LONG).show();
+                }
+            });
+        }, "update-check").start();
     }
 
     // ---------------------------------------------------------------- dialogs

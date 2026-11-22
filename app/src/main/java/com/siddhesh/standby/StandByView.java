@@ -457,6 +457,10 @@ public class StandByView extends View implements SensorEventListener {
         return locked;
     }
 
+    float cardRadius() {
+        return settings.glass ? settings.glassRadius * d : 30 * d;
+    }
+
     int widgetAccentColor() {
         return Ui.accent(settings.widgetAccent);
     }

@@ -10,8 +10,10 @@ android {
         applicationId 'com.siddhesh.standby'
         minSdk 28
         targetSdk 34
-        versionCode 4
-        versionName '1.3'
+        // CI build number makes every release a higher version, so updates install over the old app
+        def run = (System.getenv('GITHUB_RUN_NUMBER') ?: '0').toInteger()
+        versionCode 100 + run
+        versionName "1.4.${run}"
     }
 
     signingConfigs {

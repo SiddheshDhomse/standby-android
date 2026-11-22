@@ -30,7 +30,7 @@ final class NowPlaying {
     private MediaController controller;
     private boolean started;
 
-    String title, artist, pkg;
+    String title, artist, album, pkg;
     Bitmap art, artBlur;
     boolean playing;
     long duration;
@@ -144,12 +144,13 @@ final class NowPlaying {
     private void readMetadata() {
         MediaMetadata md = controller == null ? null : controller.getMetadata();
         if (md == null) {
-            title = artist = null;
+            title = artist = album = null;
             art = artBlur = null;
             duration = 0;
             return;
         }
         title = md.getString(MediaMetadata.METADATA_KEY_TITLE);
+        album = md.getString(MediaMetadata.METADATA_KEY_ALBUM);
         artist = md.getString(MediaMetadata.METADATA_KEY_ARTIST);
         if (artist == null) artist = md.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
         duration = md.getLong(MediaMetadata.METADATA_KEY_DURATION);
