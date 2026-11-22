@@ -58,6 +58,18 @@ public class StandByView extends View implements SensorEventListener {
     private static final long CHARGE_ANIM_MS = 3200;
     private static final long EXTRAS_VISIBLE_MS = 30_000;
     private static final long WAKE_FROM_NIGHT_MS = 60_000;
+    /** Night: brightness only, in red. */
+    private static final ColorMatrixColorFilter NIGHT_FILTER = new ColorMatrixColorFilter(new ColorMatrix(new float[]{
+            0.33f, 0.59f, 0.11f, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, 0, 1, 0}));
+    /** Softer whites: 86% — slower OLED ageing, hardly visible. */
+    private static final ColorMatrixColorFilter SOFT_FILTER = new ColorMatrixColorFilter(new ColorMatrix(new float[]{
+            0.86f, 0, 0, 0, 0,
+            0, 0.86f, 0, 0, 0,
+            0, 0, 0.86f, 0, 0,
+            0, 0, 0, 1, 0}));
 
     private final Host host;
     final Settings settings;
@@ -621,24 +633,7 @@ public class StandByView extends View implements SensorEventListener {
         }
 
         boolean useLayer = night || settings.softWhites;
-        if (useLayer) {
-            ColorMatrix cm;
-            if (night) {
-                cm = new ColorMatrix(new float[]{
-                        0.33f, 0.59f, 0.11f, 0, 0,
-                        0, 0, 0, 0, 0,
-                        0, 0, 0, 0, 0,
-                        0, 0, 0, 1, 0});
-            } else {
-                float k = 0.86f; // softer whites: slower OLED ageing, hardly visible
-                cm = new ColorMatrix(new float[]{
-                        k, 0, 0, 0, 0,
-                        0, k, 0, 0, 0,
-                        0, 0, k, 0, 0,
-                        0, 0, 0, 1, 0});
-            }
-            layerPaint.setColorFilter(new ColorMatrixColorFilter(cm));
-        }
+        if (useLayer) layerPaint.setColorFilter(night ? NIGHT_FILTER : SOFT_FILTER);
         int save = useLayer ? c.saveLayer(null, layerPaint) : -1;
 
         boolean faceAnim = false;
