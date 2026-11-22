@@ -1,4 +1,4 @@
-# Security audit — StandBy for Android (v1.1)
+# Security audit — StandBy for Android (v1.1, updated for v1.2)
 
 Scope: all app code, the manifest, build config and the GitHub Actions pipeline.
 
@@ -15,13 +15,25 @@ Scope: all app code, the manifest, build config and the GitHub Actions pipeline.
 | 7 | Info | Exported components | Launcher activity (required). `SettingsActivity` (required by the system Screen-saver page, reads no intent data). Dream service (protected by `BIND_DREAM_SERVICE`). Listener service (protected by `BIND_NOTIFICATION_LISTENER_SERVICE`). Broadcast receivers are registered at runtime with `RECEIVER_NOT_EXPORTED`. |
 | 8 | Info | No WebViews, no dynamic code, no `PendingIntent`s, no file sharing, no logging of user data, no analytics, no ads. | — |
 
+## v1.2 additions
+
+| Area | Risk | Mitigation |
+|---|---|---|
+| Calendar / Teams (`READ_CALENDAR`) | Work meeting titles visible on a locked phone; malicious links in event text | Read-only; nothing stored or sent. **Hide details when locked** is on by default. The Join button only opens `https://teams.microsoft.com/l/meetup-join/…` or `https://teams.live.com/meet/…`, and asks you to unlock first. |
+| To-do | Personal tasks on a locked phone | Stored only in app-private storage (backups off); only a count is shown while locked. Input is length-limited. |
+| Weather (Open-Meteo) | Location privacy, network | No location permission. Only the chosen city's coordinates, rounded to about 1 km, are sent over HTTPS to an allow-listed host. Responses are size-limited and parsed as JSON. |
+| Pomodoro alarm | Hijackable broadcasts or PendingIntents | Receiver is not exported. All PendingIntents are explicit and `FLAG_IMMUTABLE`. `USE_EXACT_ALARM` is used because StandBy is a clock app. |
+| Quick Settings tiles | Other apps toggling settings | Protected by `BIND_QUICK_SETTINGS_TILE`, so only the system can bind. |
+| Settings change listener | — | Only re-reads the app's own private preferences. |
+
 ## Permissions
 
 | Permission | Why |
 |---|---|
 | `READ_MEDIA_IMAGES` / `READ_MEDIA_VISUAL_USER_SELECTED` | Photos view (Android 14 "selected photos" access supported) |
-| `INTERNET` | Wallpapers only (Bing / picsum.photos), off by default |
-| `VIBRATE` | Pomodoro alert |
+| `INTERNET` | Weather (Open-Meteo) and optional wallpapers (Bing / picsum.photos) |
+| `VIBRATE`, `POST_NOTIFICATIONS`, `USE_EXACT_ALARM` | Pomodoro alerts, even when StandBy is closed |
+| `READ_CALENDAR` | Up Next / Teams meetings (optional) |
 | Notification access (user-granted) | Now Playing / Spotify (optional) |
 
 ## Reporting
