@@ -126,6 +126,10 @@ public class StandByView extends View implements SensorEventListener {
     private boolean autoSwitched;
     private int prevPage, prevFace;
     private long stoppedAt;
+    private long lastPlayingAt;
+    private long pausedSince = -1_000_000L;
+    private boolean npDismissed;
+    private long attachedAt;
 
     // overlays
     private boolean showCustomize;
@@ -260,6 +264,7 @@ public class StandByView extends View implements SensorEventListener {
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         attached = true;
+        attachedAt = System.currentTimeMillis();
         Context ctx = getContext();
         IntentFilter f = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
         Intent sticky;
@@ -529,9 +534,15 @@ public class StandByView extends View implements SensorEventListener {
             rotateSlot = -1;
         }
 
-        // Now Playing takes over while music plays, then hands back
+        // Now Playing takes over when music STARTS (after a real pause), then hands back.
+        // Track changes cause a split-second pause; those never trigger a switch, and once the
+        // user swipes away we leave them alone until the music has really stopped.
         boolean playing = nowPlaying.active() && nowPlaying.playing;
-        if (settings.autoNowPlaying && playing && !lastPlaying && !autoSwitched && dragMode == DRAG_NONE) {
+        if (playing) lastPlayingAt = now;
+        boolean realStart = playing && !lastPlaying && now - pausedSince > 20_000 && now - attachedAt > 4000;
+        if (!playing && lastPlaying) pausedSince = now;
+        if (!playing && now - lastPlayingAt > 60_000) npDismissed = false;
+        if (settings.autoNowPlaying && realStart && !autoSwitched && !npDismissed && dragMode == DRAG_NONE) {
             int pi = pageIndexOf(PAGE_CLOCK), fi = faceIndexOf(ClockFaces.NOW_PLAYING);
             if (pi >= 0 && fi >= 0 && !(page == pi && Math.floorMod(faceIdx, settings.faces.length) == fi)) {
                 prevPage = page;
@@ -567,7 +578,7 @@ public class StandByView extends View implements SensorEventListener {
         h24 = DateFormat.is24HourFormat(getContext());
         Calendar cal = Calendar.getInstance();
         pomodoro.tick(now, settings);
-        wallpaper.ensure(settings);
+        wallpaper.ensure(settings.activeWallpaper(), settings.wallpaperInterval);
         weather.ensure(settings);
         agenda.ensure(settings);
         updateModes(now, cal);
@@ -640,8 +651,7 @@ public class StandByView extends View implements SensorEventListener {
                 c.clipRect(0, 0, w, h);
                 int type = pageType(p);
                 faceAnim |= drawPage(c, type, w, h, cal, now);
-                if (type != PAGE_PHOTOS && (settings.glass
-                        || (type == PAGE_CLOCK && currentFace() == ClockFaces.GLASS))) glassVisible = true;
+                if (type != PAGE_PHOTOS && LiquidGlass.animated(settings)) glassVisible = true;
                 c.restore();
             }
             boolean extras = !settings.fadeExtras || now - lastTouchAt < EXTRAS_VISIBLE_MS;
@@ -672,7 +682,7 @@ public class StandByView extends View implements SensorEventListener {
         if (fast) {
             postInvalidateOnAnimation();
         } else if (glass) {
-            postDelayed(tick, 40); // ~25 fps is plenty for the slow liquid background
+            postDelayed(tick, 40); // ~25 fps is plenty for the slowly flowing background
         } else if (attached) {
             postDelayed(tick, 1000 - (now % 1000) + 5);
         }
@@ -694,12 +704,11 @@ public class StandByView extends View implements SensorEventListener {
         switch (type) {
             case PAGE_WIDGETS: {
                 boolean glass = settings.glass;
-                boolean wp = !glass && settings.wallpaperOnWidgets && wallpaper.bitmap() != null;
-                if (glass) liquid.drawBackground(c, w, h, now, settings.glassPalette);
-                else if (wp) wallpaper.draw(c, w, h, settings.wallpaperDim);
+                liquid.drawBackground(c, w, h, now, settings, wallpaper.bitmap());
+                boolean overBg = settings.bgSource != Settings.BG_BLACK;
                 burnInShift(c);
                 layoutCards(w, h);
-                for (int s = 0; s < 2; s++) drawStack(c, s, cal, now, wp, glass);
+                for (int s = 0; s < 2; s++) drawStack(c, s, cal, now, overBg, glass);
                 return false;
             }
             case PAGE_PHOTOS: {
@@ -734,7 +743,7 @@ public class StandByView extends View implements SensorEventListener {
         float pos = stackPos[s];
         int base = (int) Math.floor(pos);
         float frac = pos - base;
-        float radius = 30 * d;
+        float radius = glass ? settings.glassRadius * d : 30 * d;
         c.save();
         c.clipRect(r);
         for (int k = 0; k <= 1; k++) {
@@ -769,11 +778,7 @@ public class StandByView extends View implements SensorEventListener {
         int[] list = settings.faces;
         int base = (int) Math.floor(facePos);
         float frac = facePos - base;
-        if (settings.glass) {
-            liquid.drawBackground(c, w, h, now, settings.glassPalette);
-        } else if (settings.wallpaperOnFaces && wallpaper.bitmap() != null) {
-            wallpaper.draw(c, w, h, settings.wallpaperDim);
-        }
+        liquid.drawBackground(c, w, h, now, settings, wallpaper.bitmap());
         boolean anim = false;
         for (int k = 0; k <= 1; k++) {
             float dy = (k - frac) * h;
@@ -1111,10 +1116,10 @@ public class StandByView extends View implements SensorEventListener {
                         dragMode = DRAG_IGNORE;
                     } else if (Math.abs(dx) > Math.abs(dy)) {
                         dragMode = DRAG_H;
-                        autoSwitched = false;
+                        userTookOver();
                     } else {
                         dragMode = DRAG_V;
-                        autoSwitched = false;
+                        userTookOver();
                         beginVertical(w, h);
                     }
                 }
@@ -1165,6 +1170,12 @@ public class StandByView extends View implements SensorEventListener {
             }
         }
         return super.onTouchEvent(e);
+    }
+
+    /** The user is navigating: stop any automatic Now Playing switching for this listening session. */
+    private void userTookOver() {
+        if (autoSwitched || (nowPlaying.active() && nowPlaying.playing)) npDismissed = true;
+        autoSwitched = false;
     }
 
     private void beginVertical(int w, int h) {

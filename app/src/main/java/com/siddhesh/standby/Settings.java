@@ -13,8 +13,11 @@ final class Settings {
     static final int KEEP_ALWAYS = 0, KEEP_CHARGING = 1, KEEP_SYSTEM = 2;
     static final String[] KEEP_NAMES = {"Always on", "Only while charging", "Use system screen timeout"};
 
-    static final int WP_NONE = 0, WP_BING = 1, WP_PICSUM = 2;
-    static final String[] WP_NAMES = {"None (black)", "Bing wallpaper of the day", "Random photo (picsum.photos)"};
+    static final int WP_NONE = 0, WP_BING = 1, WP_PICSUM = 2, WP_OWN = 3;
+    static final String[] WP_NAMES = {"None (black)", "Bing wallpaper of the day", "Random photo (picsum.photos)", "My own image"};
+    static final int BG_FLOW = 0, BG_WALLPAPER = 1, BG_BLACK = 2;
+    static final String[] TINT_NAMES = {"No tint", "Cool", "Warm", "Rose", "Mint"};
+    static final int[] TINT_COLORS = {0, 0xFF64AAFF, 0xFFFFAA5A, 0xFFFF78AA, 0xFF6EE6BE};
     static final int[] WP_MINUTES = {15, 30, 60, 180, 1440};
     static final String[] WP_MINUTE_NAMES = {"Every 15 minutes", "Every 30 minutes", "Every hour", "Every 3 hours", "Once a day"};
 
@@ -60,6 +63,8 @@ final class Settings {
     int bedStart, bedEnd, bedInk, sleepStart, sleepEnd, faceRotate;
     String weatherCity;
     float weatherLat, weatherLon;
+    // v1.3 background & glass
+    int bgSource, wallSrc, bgBlur, glassBlur, glassRefr, glassFrost, glassRim, glassRadius, glassTint;
     String calendarIds;  // "" = all calendars
     boolean calendarTodayOnly;
 
@@ -91,7 +96,7 @@ final class Settings {
         brightness = sp.getInt("brightness", -1);
         keepOn = clamp(sp.getInt("keepOn", KEEP_ALWAYS), 0, 2);
         wallpaperSource = clamp(sp.getInt("wpSource", WP_NONE), 0, 2);
-        wallpaperDim = clamp(sp.getInt("wpDim", 45), 0, 90);
+        wallpaperDim = clamp(sp.getInt("wpDim", 30), 0, 90);
         wallpaperInterval = clamp(sp.getInt("wpInterval", 2), 0, WP_MINUTES.length - 1);
         photoCorner = clamp(sp.getInt("photoCorner", 0), 0, 3);
         pomoFocus = clamp(sp.getInt("pomoFocus", 25), 1, 120);
@@ -120,6 +125,16 @@ final class Settings {
         weatherLat = sp.getFloat("weatherLat", Float.NaN);
         weatherLon = sp.getFloat("weatherLon", Float.NaN);
         calendarIds = sp.getString("calendarIds", "");
+        bgSource = clamp(sp.getInt("bgSource", BG_FLOW), 0, 2);
+        int legacy = sp.getInt("wpSource", WP_NONE);
+        wallSrc = clamp(sp.getInt("wallSrc", legacy == WP_NONE ? WP_BING : legacy), 1, 3);
+        bgBlur = clamp(sp.getInt("bgBlur", 0), 0, 100);
+        glassBlur = clamp(sp.getInt("glassBlur", 60), 0, 100);
+        glassRefr = clamp(sp.getInt("glassRefr", 50), 0, 100);
+        glassFrost = clamp(sp.getInt("glassFrost", 15), 0, 100);
+        glassRim = clamp(sp.getInt("glassRim", 60), 0, 100);
+        glassRadius = clamp(sp.getInt("glassRadius", 26), 8, 44);
+        glassTint = clamp(sp.getInt("glassTint", 0), 0, TINT_COLORS.length - 1);
         calendarTodayOnly = sp.getBoolean("calTodayOnly", false);
     }
 
@@ -140,6 +155,18 @@ final class Settings {
 
     void putString(String k, String v) {
         sp.edit().putString(k, v).apply();
+        load();
+    }
+
+    /** Wallpaper source to download/load right now (WP_NONE unless the background is a wallpaper). */
+    int activeWallpaper() {
+        return bgSource == BG_WALLPAPER ? wallSrc : WP_NONE;
+    }
+
+    void resetLook() {
+        sp.edit().remove("bgSource").remove("wallSrc").remove("bgBlur").remove("wpDim").remove("glass")
+                .remove("glassPalette").remove("glassBlur").remove("glassRefr").remove("glassFrost")
+                .remove("glassRim").remove("glassRadius").remove("glassTint").apply();
         load();
     }
 
