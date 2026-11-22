@@ -19,11 +19,14 @@ import java.util.TimeZone;
 /** Full-screen clock faces of the Clock view (swipe up/down to switch). */
 final class ClockFaces {
     static final int DIGITAL = 0, ANALOG = 1, WORLD = 2, SOLAR = 3, FLOAT = 4, FLIP = 5, STACKED = 6,
-            RINGS = 7, WORDS = 8, NEON = 9, SEGMENT = 10, POMODORO = 11, NOW_PLAYING = 12, COUNT = 13;
+            RINGS = 7, WORDS = 8, NEON = 9, SEGMENT = 10, POMODORO = 11, NOW_PLAYING = 12,
+            GLASS = 13, WEATHER = 14, BEDSIDE = 15, COUNT = 16;
     static final String[] NAMES = {"Digital", "Analog", "World", "Solar", "Float", "Flip", "Stacked",
-            "Rings", "Words", "Neon", "Retro LED", "Pomodoro", "Now Playing"};
+            "Rings", "Words", "Neon", "Retro LED", "Pomodoro", "Now Playing", "Liquid Glass", "Weather",
+            "Bedside"};
     /** Index into Ui.ACCENTS, per face id. */
-    static final int[] DEFAULT_ACCENT = {1, 1, 0, 0, 7, 0, 2, 4, 3, 8, 1, 1, 0};
+    static final int[] DEFAULT_ACCENT = {1, 1, 0, 0, 7, 0, 2, 4, 3, 8, 1, 1, 0, 0, 0, 0};
+    private int[] cities = WorldCities.DEFAULT;
 
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint bp = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
@@ -78,7 +81,7 @@ final class ClockFaces {
 
     /** Faces that draw their own full-screen background (wallpaper is skipped). */
     static boolean ownBackground(int face) {
-        return face == SOLAR || face == NOW_PLAYING;
+        return face == SOLAR || face == NOW_PLAYING || face == BEDSIDE;
     }
 
     boolean continuous(int face, long now) {
@@ -89,6 +92,7 @@ final class ClockFaces {
 
     void draw(Canvas c, int face, int w, int h, Calendar cal, int accent, long now, StandByView v) {
         boolean h24 = v.h24;
+        cities = v.settings.cities;
         p.setShader(null);
         p.setStyle(Paint.Style.FILL);
         p.setLetterSpacing(0f);
@@ -107,6 +111,9 @@ final class ClockFaces {
             case SEGMENT: segment(c, w, h, cal, accent, h24); break;
             case POMODORO: v.pomodoro.drawFace(c, w, h, now, v.settings); break;
             case NOW_PLAYING: nowPlaying(c, w, h, cal, accent, v); break;
+            case GLASS: glass(c, w, h, cal, now, v); break;
+            case WEATHER: v.weather.drawFace(c, w, h, cal, accent, h24, v.settings.glass, v.liquid, now); break;
+            case BEDSIDE: bedside(c, w, h, cal, v); break;
         }
         p.setShader(null);
         p.setLetterSpacing(0f);
@@ -171,11 +178,12 @@ final class ClockFaces {
         float ry = landscape ? 0f : leftH;
         float rh = landscape ? h : h - leftH;
         float pad = 24 * d;
-        int n = Widgets.CITIES.length;
+        int[] ids = cities;
+        int n = Math.min(ids.length, WorldCities.MAX);
         float rowH = (rh - 2 * pad) / n;
         long ms = cal.getTimeInMillis();
         for (int i = 0; i < n; i++) {
-            TimeZone tz = TimeZone.getTimeZone(Widgets.CITIES[i][1]);
+            TimeZone tz = TimeZone.getTimeZone(WorldCities.ZONES[ids[i]]);
             Calendar cc = Calendar.getInstance(tz);
             cc.setTimeInMillis(ms);
             float top = ry + pad + i * rowH;
@@ -191,7 +199,7 @@ final class ClockFaces {
             p.setTypeface(Ui.MEDIUM);
             p.setColor(0xFFFFFFFF);
             p.setTextSize(rowH * 0.28f);
-            c.drawText(Widgets.CITIES[i][0], cx + rad + 16 * d, cy - rowH * 0.02f, p);
+            c.drawText(WorldCities.NAMES[ids[i]], cx + rad + 16 * d, cy - rowH * 0.02f, p);
             p.setTypeface(Ui.REGULAR);
             p.setColor(Ui.GRAY);
             p.setTextSize(rowH * 0.2f);
@@ -697,6 +705,62 @@ final class ClockFaces {
         p.setTextSize(Math.min(w, h) * 0.06f);
         p.setTextAlign(Paint.Align.RIGHT);
         c.drawText(Ui.time(cal, v.h24), w - w * 0.04f, h * 0.12f, p);
+        p.setTextAlign(Paint.Align.LEFT);
+    }
+
+    // ------------------------------------------------------------ v1.2 faces
+
+    /** Minimal Liquid Glass: one frosted slab with a thin, quiet time. */
+    private void glass(Canvas c, int w, int h, Calendar cal, long now, StandByView v) {
+        if (!v.settings.glass) {
+            // Glass look is off globally: this face still brings its own flowing background.
+            c.save();
+            c.translate(-v.driftX, -v.driftY);
+            v.liquid.drawBackground(c, w, h, now, v.settings.glassPalette);
+            c.restore();
+        }
+        boolean land = w >= h;
+        float sw = land ? w * 0.70f : w * 0.84f;
+        float sh = land ? h * 0.58f : h * 0.36f;
+        rf.set((w - sw) / 2f, (h - sh) / 2f - h * 0.03f, (w + sw) / 2f, (h + sh) / 2f - h * 0.03f);
+        v.liquid.card(c, new RectF(rf), Math.min(sh * 0.32f, 52 * d), now);
+        String t = Ui.time(cal, v.h24);
+        p.setTypeface(Ui.LIGHT);
+        p.setColor(0xF2FFFFFF);
+        p.setLetterSpacing(-0.02f);
+        Ui.fit(p, t, sw * 0.78f, sh * 0.62f, tmp);
+        Ui.textCenter(c, p, t, rf.centerX(), rf.centerY(), tmp);
+        p.setLetterSpacing(0.22f);
+        String ds = dateFmt.format(cal.getTime()).toUpperCase(Locale.getDefault());
+        p.setTypeface(Ui.MEDIUM);
+        p.setColor(0xB3FFFFFF);
+        Ui.fitWidth(p, ds, sw, Math.min(w, h) * 0.04f);
+        Ui.textCenter(c, p, ds, w / 2f, rf.bottom + h * 0.085f, tmp);
+        p.setLetterSpacing(0f);
+    }
+
+    /** Night face: outline digits only (about 3% of pixels lit), slow wide drift, dim ink. */
+    void bedside(Canvas c, int w, int h, Calendar cal, StandByView v) {
+        c.drawColor(0xFF000000);
+        int ink = Settings.INK_COLORS[v.settings.bedInk];
+        int minute = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE);
+        float r = 24 * d;
+        float dx = (float) Math.sin(minute * 0.29) * r, dy = (float) Math.cos(minute * 0.41) * r * 0.7f;
+        String t = Ui.time(cal, v.h24);
+        p.setTypeface(Ui.LIGHT);
+        float size = Ui.fit(p, t, w * 0.62f, h * 0.42f, tmp);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(1.2f, size * 0.008f));
+        p.setColor(ink);
+        Ui.textCenter(c, p, t, w / 2f + dx, h * 0.47f + dy, tmp);
+        p.setStyle(Paint.Style.FILL);
+        String alarm = v.nextAlarm();
+        if (alarm != null) {
+            p.setTypeface(Ui.MEDIUM);
+            p.setColor(Ui.alpha(ink, 170));
+            p.setTextSize(Math.min(w, h) * 0.045f);
+            Ui.textCenter(c, p, "Alarm " + alarm, w / 2f + dx, h * 0.47f + dy + size * 0.55f, tmp);
+        }
         p.setTextAlign(Paint.Align.LEFT);
     }
 

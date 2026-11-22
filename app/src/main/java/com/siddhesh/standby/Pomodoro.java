@@ -41,6 +41,11 @@ final class Pomodoro {
         this.ctx = ctx;
         this.d = density;
         sp = ctx.getSharedPreferences(Settings.FILE, Context.MODE_PRIVATE);
+        reload();
+    }
+
+    /** Re-reads state (the alarm receiver may have advanced it while StandBy was closed). */
+    void reload() {
         mode = Settings.clamp(sp.getInt("pomo_mode", FOCUS), 0, 2);
         running = sp.getBoolean("pomo_running", false);
         endAt = sp.getLong("pomo_end", 0);
@@ -51,7 +56,27 @@ final class Pomodoro {
     private void save() {
         sp.edit().putInt("pomo_mode", mode).putBoolean("pomo_running", running)
                 .putLong("pomo_end", endAt).putLong("pomo_remaining", remaining)
-                .putInt("pomo_done", done).apply();
+                .putInt("pomo_done", done).commit();
+        schedule();
+    }
+
+    /** Exact alarm at the end of the running session (works with the screen off). */
+    private void schedule() {
+        try {
+            android.app.AlarmManager am = (android.app.AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
+            if (am == null) return;
+            android.content.Intent i = new android.content.Intent(ctx, PomodoroReceiver.class);
+            android.app.PendingIntent pi = android.app.PendingIntent.getBroadcast(ctx, 7, i,
+                    android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+            am.cancel(pi);
+            if (!running) return;
+            if (android.os.Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()) {
+                am.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, endAt, pi);
+            } else {
+                am.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, endAt, pi);
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     long duration(int m, Settings s) {
@@ -100,8 +125,11 @@ final class Pomodoro {
             save();
         }
         if (running && now >= endAt) {
-            advance(now, s, true);
-            return true;
+            reload(); // another instance (alarm receiver) may already have handled it
+            if (running && now >= endAt) {
+                advance(now, s, true);
+                return true;
+            }
         }
         return false;
     }
@@ -123,7 +151,50 @@ final class Pomodoro {
         save();
     }
 
+    private static final String CH_SOUND = "pomodoro_sound", CH_SILENT = "pomodoro_vibrate";
+
     private void alert(Settings s) {
+        boolean posted = false;
+        try {
+            android.app.NotificationManager nm =
+                    (android.app.NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            boolean allowed = nm != null && (android.os.Build.VERSION.SDK_INT < 33
+                    || ctx.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED) && nm.areNotificationsEnabled();
+            if (allowed) {
+                android.app.NotificationChannel snd = new android.app.NotificationChannel(CH_SOUND,
+                        "Pomodoro (sound)", android.app.NotificationManager.IMPORTANCE_HIGH);
+                snd.enableVibration(true);
+                snd.setVibrationPattern(new long[]{0, 400, 200, 400, 200, 700});
+                android.app.NotificationChannel sil = new android.app.NotificationChannel(CH_SILENT,
+                        "Pomodoro (vibrate only)", android.app.NotificationManager.IMPORTANCE_HIGH);
+                sil.setSound(null, null);
+                sil.enableVibration(true);
+                sil.setVibrationPattern(new long[]{0, 400, 200, 400, 200, 700});
+                nm.createNotificationChannel(snd);
+                nm.createNotificationChannel(sil);
+                android.content.Intent open = new android.content.Intent(ctx, StandByActivity.class)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                android.app.PendingIntent pi = android.app.PendingIntent.getActivity(ctx, 8, open,
+                        android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+                String title = mode == FOCUS ? "Break over \u2014 time to focus"
+                        : (mode == LONG ? "Great work! Take a long break" : "Focus done \u2014 take a short break");
+                android.app.Notification n = new android.app.Notification.Builder(ctx, s.pomoSound ? CH_SOUND : CH_SILENT)
+                        .setSmallIcon(R.drawable.ic_tile_standby)
+                        .setContentTitle(title)
+                        .setContentText(running ? MODE_NAMES[mode] + " started (" + fmt(duration(mode, s)) + ")"
+                                : "Tap to open StandBy and start the next session")
+                        .setCategory(android.app.Notification.CATEGORY_ALARM)
+                        .setAutoCancel(true)
+                        .setContentIntent(pi)
+                        .build();
+                nm.notify(41, n);
+                posted = true;
+            }
+        } catch (Exception ignored) {
+        }
+        if (posted) return;
+        // fallback when notifications are off
         try {
             Vibrator v = (Vibrator) ctx.getSystemService(Context.VIBRATOR_SERVICE);
             if (v != null && v.hasVibrator()) {

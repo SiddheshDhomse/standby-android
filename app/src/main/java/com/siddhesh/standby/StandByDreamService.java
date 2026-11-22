@@ -63,6 +63,27 @@ public class StandByDreamService extends DreamService implements StandByView.Hos
     }
 
     @Override
+    public void openTodo() {
+        launch(new Intent(this, TodoActivity.class));
+    }
+
+    @Override
+    public void openUrl(String url) {
+        if (!Agenda.isSafeJoinUrl(url)) return; // only Teams meeting links
+        launch(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE));
+    }
+
+    /** Leaves the screen saver and opens something (Android asks to unlock first if needed). */
+    private void launch(Intent i) {
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            startActivity(i);
+        } catch (Exception ignored) {
+        }
+        finish();
+    }
+
+    @Override
     public void exit() {
         finish();
     }

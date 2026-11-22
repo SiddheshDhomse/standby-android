@@ -15,19 +15,15 @@ import java.util.TimeZone;
 /** The widgets shown in the two side-by-side stacks of the Widgets view. */
 final class Widgets {
     static final int ANALOG = 0, DIGITAL = 1, WORLD = 2, CALENDAR = 3, BATTERY = 4, DATE = 5,
-            NOW_PLAYING = 6, POMODORO = 7, COUNT = 8;
+            NOW_PLAYING = 6, POMODORO = 7, WEATHER = 8, UP_NEXT = 9, TODO = 10, COUNT = 11;
     static final String[] NAMES = {"Analog clock", "Digital clock", "World clock", "Calendar",
-            "Battery", "Date & next alarm", "Now Playing (Spotify)", "Pomodoro timer"};
+            "Battery", "Date & next alarm", "Now Playing (Spotify)", "Pomodoro timer", "Weather",
+            "Up Next (Teams / calendar)", "To-do list"};
 
     /** Now Playing controls per stack: [stack][prev, play, next]. */
     final RectF[][] npHits = {{new RectF(), new RectF(), new RectF()}, {new RectF(), new RectF(), new RectF()}};
 
-    static final String[][] CITIES = {
-            {"Cupertino", "America/Los_Angeles"},
-            {"New York", "America/New_York"},
-            {"London", "Europe/London"},
-            {"Tokyo", "Asia/Tokyo"},
-    };
+
 
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Rect tmp = new Rect();
@@ -57,6 +53,10 @@ final class Widgets {
             case DATE: date(c, r, cal, accent, v); break;
             case NOW_PLAYING: nowPlaying(c, r, v, stack); break;
             case POMODORO: v.pomodoro.drawWidget(c, r, now, v.settings); break;
+            case WEATHER: v.weather.drawWidget(c, r, v.settings); break;
+            case UP_NEXT: v.agenda.drawWidget(c, r, accent == 0xFFFFFFFF ? Ui.RED : accent, v.h24,
+                    v.hideDetails(), stack); break;
+            case TODO: v.todo.drawWidget(c, r, accent == 0xFFFFFFFF ? Ui.RED : accent, v.hideDetails(), stack); break;
         }
     }
 
@@ -82,12 +82,15 @@ final class Widgets {
 
     private void world(Canvas c, RectF r, Calendar cal, StandByView v) {
         float pad = 22 * d;
-        float rowH = (r.height() - 2 * pad) / CITIES.length;
+        int[] ids = v.settings.cities;
+        int n = Math.min(ids.length, WorldCities.MAX);
+        float rowH = (r.height() - 2 * pad) / n;
         long ms = cal.getTimeInMillis();
         TimeZone local = cal.getTimeZone();
         int localDay = cal.get(Calendar.YEAR) * 400 + cal.get(Calendar.DAY_OF_YEAR);
-        for (int i = 0; i < CITIES.length; i++) {
-            TimeZone tz = TimeZone.getTimeZone(CITIES[i][1]);
+        for (int i = 0; i < n; i++) {
+            String cityName = WorldCities.NAMES[ids[i]];
+            TimeZone tz = TimeZone.getTimeZone(WorldCities.ZONES[ids[i]]);
             Calendar cc = Calendar.getInstance(tz);
             cc.setTimeInMillis(ms);
             int diffMin = (tz.getOffset(ms) - local.getOffset(ms)) / 60000;
@@ -101,8 +104,8 @@ final class Widgets {
             p.setTextAlign(Paint.Align.LEFT);
             p.setTypeface(Ui.MEDIUM);
             p.setColor(0xFFFFFFFF);
-            Ui.fitWidth(p, CITIES[i][0], (right - left) * 0.5f, rowH * 0.30f);
-            c.drawText(CITIES[i][0], left, top + rowH * 0.46f, p);
+            Ui.fitWidth(p, cityName, (right - left) * 0.5f, rowH * 0.30f);
+            c.drawText(cityName, left, top + rowH * 0.46f, p);
 
             p.setTypeface(Ui.REGULAR);
             p.setColor(Ui.GRAY);
@@ -116,7 +119,7 @@ final class Widgets {
             p.setTextSize(rowH * 0.52f);
             c.drawText(t, right, top + rowH * 0.72f, p);
 
-            if (i < CITIES.length - 1) {
+            if (i < n - 1) {
                 p.setColor(Ui.alpha(0xFFFFFFFF, 40));
                 p.setStrokeWidth(Math.max(1f, d));
                 c.drawLine(left, top + rowH, right, top + rowH, p);

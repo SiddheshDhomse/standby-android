@@ -19,15 +19,21 @@ final class Settings {
     static final String[] WP_MINUTE_NAMES = {"Every 15 minutes", "Every 30 minutes", "Every hour", "Every 3 hours", "Once a day"};
 
     static final String[] CORNER_NAMES = {"Top left", "Top right", "Bottom left", "Bottom right"};
+    static final int[] ROTATE_HOURS = {0, 1, 2, 4};
+    static final String[] ROTATE_NAMES = {"Off", "Every hour", "Every 2 hours", "Every 4 hours"};
+    static final String[] INK_NAMES = {"Dim red", "Dim grey", "Dim amber"};
+    static final int[] INK_COLORS = {0xFFB33A2E, 0xFF8E8E93, 0xFFB07A2E};
 
     static final String[] PAGE_NAMES = {"Widgets", "Photos", "Clock"};
-    static final int[] DEFAULT_PAGES = {StandByView.PAGE_WIDGETS, StandByView.PAGE_PHOTOS, StandByView.PAGE_CLOCK};
-    static final int[] DEFAULT_STACK0 = {Widgets.ANALOG, Widgets.DIGITAL, Widgets.WORLD, Widgets.POMODORO};
-    static final int[] DEFAULT_STACK1 = {Widgets.CALENDAR, Widgets.BATTERY, Widgets.DATE, Widgets.NOW_PLAYING};
+    static final int[] DEFAULT_PAGES = {StandByView.PAGE_WIDGETS, StandByView.PAGE_CLOCK};
+    static final int[] DEFAULT_STACK0 = {Widgets.DIGITAL, Widgets.ANALOG, Widgets.WEATHER, Widgets.WORLD, Widgets.POMODORO};
+    static final int[] DEFAULT_STACK1 = {Widgets.UP_NEXT, Widgets.TODO, Widgets.CALENDAR, Widgets.NOW_PLAYING,
+            Widgets.BATTERY, Widgets.DATE};
     static final int[] DEFAULT_FACES = {
-            ClockFaces.DIGITAL, ClockFaces.ANALOG, ClockFaces.FLIP, ClockFaces.STACKED, ClockFaces.FLOAT,
-            ClockFaces.NEON, ClockFaces.SEGMENT, ClockFaces.RINGS, ClockFaces.WORDS, ClockFaces.WORLD,
-            ClockFaces.SOLAR, ClockFaces.POMODORO, ClockFaces.NOW_PLAYING,
+            ClockFaces.GLASS, ClockFaces.DIGITAL, ClockFaces.ANALOG, ClockFaces.FLIP, ClockFaces.WEATHER,
+            ClockFaces.STACKED, ClockFaces.FLOAT, ClockFaces.NEON, ClockFaces.SEGMENT, ClockFaces.RINGS,
+            ClockFaces.WORDS, ClockFaces.WORLD, ClockFaces.SOLAR, ClockFaces.POMODORO, ClockFaces.NOW_PLAYING,
+            ClockFaces.BEDSIDE,
     };
 
     final SharedPreferences sp;
@@ -35,6 +41,7 @@ final class Settings {
     int[] pages;
     final int[][] stacks = new int[2][];
     int[] faces;
+    int[] cities;
     int widgetAccent;
     final int[] faceAccent = new int[ClockFaces.COUNT];
 
@@ -43,6 +50,17 @@ final class Settings {
     int brightness;      // -1 = follow system, else 1..100
     int keepOn, wallpaperSource, wallpaperDim, wallpaperInterval, photoCorner;
     int pomoFocus, pomoShort, pomoLong, pomoRounds;
+
+    // v1.2
+    boolean glass;
+    int glassPalette;
+    boolean softWhites, autoDim, doubleTapDim, fadeExtras, autoNowPlaying, hideDetailsLocked;
+    int autoDimMinutes;
+    boolean bedside, sleepWindow;
+    int bedStart, bedEnd, bedInk, sleepStart, sleepEnd, faceRotate;
+    String weatherCity;
+    float weatherLat, weatherLon;
+    String calendarIds;  // "" = all calendars
 
     Settings(Context c) {
         sp = c.getSharedPreferences(FILE, Context.MODE_PRIVATE);
@@ -54,6 +72,7 @@ final class Settings {
         stacks[0] = parse(sp.getString("stackItems0", null), DEFAULT_STACK0, Widgets.COUNT);
         stacks[1] = parse(sp.getString("stackItems1", null), DEFAULT_STACK1, Widgets.COUNT);
         faces = parse(sp.getString("faces", null), DEFAULT_FACES, ClockFaces.COUNT);
+        cities = parse(sp.getString("cities", null), WorldCities.DEFAULT, WorldCities.NAMES.length);
         widgetAccent = sp.getInt("widgetAccent", 1);
         for (int i = 0; i < ClockFaces.COUNT; i++) {
             faceAccent[i] = sp.getInt("faceAccent" + i, ClockFaces.DEFAULT_ACCENT[i]);
@@ -78,6 +97,28 @@ final class Settings {
         pomoShort = clamp(sp.getInt("pomoShort", 5), 1, 60);
         pomoLong = clamp(sp.getInt("pomoLong", 15), 1, 60);
         pomoRounds = clamp(sp.getInt("pomoRounds", 4), 2, 10);
+
+        glass = sp.getBoolean("glass", true);
+        glassPalette = clamp(sp.getInt("glassPalette", 0), 0, LiquidGlass.PALETTE_NAMES.length - 1);
+        softWhites = sp.getBoolean("softWhites", true);
+        autoDim = sp.getBoolean("autoDim", true);
+        autoDimMinutes = clamp(sp.getInt("autoDimMinutes", 10), 1, 60);
+        doubleTapDim = sp.getBoolean("doubleTapDim", true);
+        fadeExtras = sp.getBoolean("fadeExtras", true);
+        autoNowPlaying = sp.getBoolean("autoNowPlaying", true);
+        hideDetailsLocked = sp.getBoolean("hideDetailsLocked", true);
+        bedside = sp.getBoolean("bedside", true);
+        bedStart = clamp(sp.getInt("bedStart", 23), 0, 23);
+        bedEnd = clamp(sp.getInt("bedEnd", 7), 0, 23);
+        bedInk = clamp(sp.getInt("bedInk", 0), 0, INK_COLORS.length - 1);
+        sleepWindow = sp.getBoolean("sleepWindow", false);
+        sleepStart = clamp(sp.getInt("sleepStart", 1), 0, 23);
+        sleepEnd = clamp(sp.getInt("sleepEnd", 6), 0, 23);
+        faceRotate = clamp(sp.getInt("faceRotate", 0), 0, ROTATE_HOURS.length - 1);
+        weatherCity = sp.getString("weatherCity", "");
+        weatherLat = sp.getFloat("weatherLat", Float.NaN);
+        weatherLon = sp.getFloat("weatherLon", Float.NaN);
+        calendarIds = sp.getString("calendarIds", "");
     }
 
     void putInt(String k, int v) {
@@ -93,6 +134,29 @@ final class Settings {
     void putList(String k, int[] v) {
         sp.edit().putString(k, join(v)).apply();
         load();
+    }
+
+    void putString(String k, String v) {
+        sp.edit().putString(k, v).apply();
+        load();
+    }
+
+    static String hourName(int h) {
+        int hh = h % 12 == 0 ? 12 : h % 12;
+        return hh + (h < 12 ? " AM" : " PM");
+    }
+
+    static String[] hourNames() {
+        String[] r = new String[24];
+        for (int i = 0; i < 24; i++) r[i] = hourName(i);
+        return r;
+    }
+
+    /** True if hour-of-day (fractional) is inside [start, end), wrapping past midnight. */
+    static boolean inWindow(float hour, int start, int end) {
+        if (start == end) return false;
+        if (start < end) return hour >= start && hour < end;
+        return hour >= start || hour < end;
     }
 
     static int clamp(int v, int lo, int hi) {
