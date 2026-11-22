@@ -23,6 +23,7 @@ public class LaunchTileService extends TileService {
 
     @Override
     @SuppressWarnings("deprecation")
+    @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated") // old API only used below Android 14
     public void onClick() {
         super.onClick();
         Intent i = new Intent(this, StandByActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);

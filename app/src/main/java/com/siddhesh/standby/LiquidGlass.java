@@ -95,7 +95,7 @@ final class LiquidGlass {
 
     void configure(Settings s) {
         float gb = s.glassBlur / 100f * 44f * d;
-        if (gb != glassBlurPx) {
+        if (gb != glassBlurPx && Build.VERSION.SDK_INT >= 31) {
             glassBlurPx = gb;
             blur = gb > 0.5f ? RenderEffect.createBlurEffect(gb, gb, Shader.TileMode.CLAMP) : null;
         }
@@ -184,7 +184,7 @@ final class LiquidGlass {
         ready = false;
         used = 0;
         int dimA = s.bgSource == Settings.BG_BLACK ? 0 : Math.round(s.wallpaperDim * 2.55f);
-        if (supported() && c.isHardwareAccelerated() && w > 0 && h > 0) {
+        if (Build.VERSION.SDK_INT >= 31 && c.isHardwareAccelerated() && w > 0 && h > 0) {
             if (bgNode == null) bgNode = new RenderNode("glass-bg");
             if (nodeW != w || nodeH != h) {
                 nodeW = w;
@@ -214,6 +214,7 @@ final class LiquidGlass {
 
     // ------------------------------------------------------------ glass panel
 
+    @android.annotation.TargetApi(31) // only called on Android 12+
     private RenderNode node(int i) {
         while (pool.size() <= i) {
             RenderNode n = new RenderNode("glass-" + pool.size());
@@ -240,7 +241,7 @@ final class LiquidGlass {
 
         c.save();
         c.clipPath(path);
-        if (ready) {
+        if (ready && Build.VERSION.SDK_INT >= 31) {
             float[] t = new float[2];
             currentTranslation(c, t);
             float dx = t[0] - bgTx, dy = t[1] - bgTy;   // panel space -> background space
@@ -263,7 +264,7 @@ final class LiquidGlass {
             rc.drawRenderNode(bgNode);
             n.endRecording();
             RenderEffect effect = blur;
-            if (lensSupported() && !shaderBroken && lensPx > 0.5f) {
+            if (Build.VERSION.SDK_INT >= 33 && !shaderBroken && lensPx > 0.5f) {
                 try {
                     RuntimeShader s = shaders.get(idx);
                     if (s == null) {

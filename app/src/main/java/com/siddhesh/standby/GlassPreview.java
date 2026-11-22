@@ -13,6 +13,7 @@ import java.util.Calendar;
 import java.util.Locale;
 
 /** Live mini StandBy used at the top of Settings › Glass & wallpaper. Real glass, real wallpaper. */
+@android.annotation.SuppressLint("ViewConstructor") // created in code only
 final class GlassPreview extends View {
     private final Settings s;
     private final LiquidGlass liquid;
@@ -24,6 +25,9 @@ final class GlassPreview extends View {
     private final float d;
     private final SimpleDateFormat dateFmt = new SimpleDateFormat("EEEE d MMM", Locale.getDefault());
     private final Runnable tick = this::invalidate;
+    private final Calendar calendar = Calendar.getInstance();
+    private final RectF frame = new RectF(), cardA = new RectF(), cardB = new RectF();
+    private final RectF[] cardsAB = {cardA, cardB};
 
     GlassPreview(Context c, Settings s) {
         super(c);
@@ -53,17 +57,19 @@ final class GlassPreview extends View {
         wallpaper.ensure(s.activeWallpaper(), s.wallpaperInterval);
         float radius = 22 * d;
         clip.reset();
-        clip.addRoundRect(new RectF(0, 0, w, h), radius, radius, Path.Direction.CW);
+        frame.set(0, 0, w, h);
+        clip.addRoundRect(frame, radius, radius, Path.Direction.CW);
         c.save();
         c.clipPath(clip);
         liquid.drawBackground(c, w, h, now, s, wallpaper.bitmap());
 
         float gap = 8 * d, m = 10 * d;
         float cw = (w - 2 * m - gap) / 2f;
-        RectF a = new RectF(m, m, m + cw, h - m);
-        RectF b = new RectF(m + cw + gap, m, w - m, h - m);
+        RectF a = cardA, b = cardB;
+        a.set(m, m, m + cw, h - m);
+        b.set(m + cw + gap, m, w - m, h - m);
         float cr = Math.min(s.glassRadius * d * 0.6f, a.height() / 2f);
-        for (RectF r : new RectF[]{a, b}) {
+        for (RectF r : cardsAB) {
             if (s.glass) {
                 liquid.card(c, r, cr, now);
             } else {
@@ -74,7 +80,8 @@ final class GlassPreview extends View {
             }
         }
 
-        Calendar cal = Calendar.getInstance();
+        Calendar cal = calendar;
+        cal.setTimeInMillis(now);
         boolean h24 = android.text.format.DateFormat.is24HourFormat(getContext());
         p.setShader(null);
         p.setStyle(Paint.Style.FILL);

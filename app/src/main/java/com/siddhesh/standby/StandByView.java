@@ -398,7 +398,7 @@ public class StandByView extends View implements SensorEventListener {
         full = status == BatteryManager.BATTERY_STATUS_FULL;
         if (batteryKnown && charging && !wasCharging && settings.chargeAnim) {
             chargeAnimStart = System.currentTimeMillis();
-            performHapticFeedback(HapticFeedbackConstants.CONFIRM);
+            performHapticFeedback(Build.VERSION.SDK_INT >= 30 ? HapticFeedbackConstants.CONFIRM : HapticFeedbackConstants.LONG_PRESS);
         }
         batteryKnown = true;
         keepOnKnown = false;
@@ -1159,6 +1159,7 @@ public class StandByView extends View implements SensorEventListener {
                 } else if (dragMode == DRAG_V) {
                     endVertical(dy, h, now);
                 } else if (dragMode == DRAG_NONE) {
+                    performClick(); // accessibility services see taps
                     onTap(x, y);
                 }
                 dragMode = DRAG_NONE;
@@ -1180,6 +1181,11 @@ public class StandByView extends View implements SensorEventListener {
     private void userTookOver() {
         if (autoSwitched || (nowPlaying.active() && nowPlaying.playing)) npDismissed = true;
         autoSwitched = false;
+    }
+
+    @Override
+    public boolean performClick() {
+        return super.performClick();
     }
 
     private void beginVertical(int w, int h) {

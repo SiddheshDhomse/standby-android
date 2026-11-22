@@ -56,7 +56,7 @@ final class Pomodoro {
     private void save() {
         sp.edit().putInt("pomo_mode", mode).putBoolean("pomo_running", running)
                 .putLong("pomo_end", endAt).putLong("pomo_remaining", remaining)
-                .putInt("pomo_done", done).commit();
+                .putInt("pomo_done", done).apply();
         schedule();
     }
 
