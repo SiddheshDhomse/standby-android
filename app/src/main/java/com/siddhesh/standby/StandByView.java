@@ -170,16 +170,16 @@ public class StandByView extends View implements SensorEventListener {
     private final SharedPreferences.OnSharedPreferenceChangeListener prefListener = (sp, key) -> {
         if (key == null) return;
         if (key.startsWith("pomo_")) {
-            pomodoro.reload();
+            this.pomodoro.reload();
         } else if (key.equals("todos")) {
-            todo.load();
+            this.todo.load();
         } else if (key.equals("pageIndex") || key.equals("faceIndex") || key.startsWith("stack")
                 && !key.startsWith("stackItems") || key.startsWith("wx_") || key.startsWith("wp_")) {
             return;
         } else {
-            settings.load();
+            this.settings.load();
             clampIndices();
-            if (key.equals("calendarIds")) agenda.invalidateCache();
+            if (key.equals("calendarIds")) this.agenda.invalidateCache();
             lastBrightness = -2f;
             keepOnKnown = false;
         }
