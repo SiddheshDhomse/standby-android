@@ -180,9 +180,15 @@ final class PhotoSlideshow {
         }
     }
 
-    void draw(Canvas c, int w, int h, long now, Calendar cal, boolean h24) {
+    void draw(Canvas c, int w, int h, long now, Calendar cal, boolean h24, boolean hidden, int corner) {
         p.setShader(null);
         p.setAlpha(255);
+        if (hidden) {
+            // Privacy: don't show the gallery to anyone who picks up the locked phone.
+            message(c, w, h, "Photos hidden while locked",
+                    "Unlock your phone to see them \u00B7 change this in Settings", false);
+            return;
+        }
         if (!hasPermission(ctx)) {
             message(c, w, h, "Show your photos in StandBy",
                     view.canAskPermission() ? "Tap to allow access to your photos"
@@ -213,26 +219,38 @@ final class PhotoSlideshow {
         }
         if (incoming == null && !loading && now - curShownAt > SHOW_MS) loadNext();
 
-        // legibility scrim + time in the corner
+        float pad = 28 * d;
+        boolean right = corner == 1 || corner == 3;
+        boolean bottom = corner == 2 || corner == 3;
+        // legibility scrim on the clock's side
         p.setAlpha(255);
-        p.setShader(new LinearGradient(0, 0, 0, h * 0.5f, 0x99000000, 0x00000000, Shader.TileMode.CLAMP));
-        c.drawRect(0, 0, w, h * 0.5f, p);
+        if (bottom) {
+            p.setShader(new LinearGradient(0, h * 0.5f, 0, h, 0x00000000, 0x99000000, Shader.TileMode.CLAMP));
+            c.drawRect(0, h * 0.5f, w, h, p);
+        } else {
+            p.setShader(new LinearGradient(0, 0, 0, h * 0.5f, 0x99000000, 0x00000000, Shader.TileMode.CLAMP));
+            c.drawRect(0, 0, w, h * 0.5f, p);
+        }
         p.setShader(null);
 
-        float pad = 28 * d;
         String t = Ui.time(cal, h24);
+        String ds = dateFmt.format(cal.getTime());
         p.setTypeface(Ui.BOLD);
         p.setColor(0xFFFFFFFF);
-        p.setTextAlign(Paint.Align.LEFT);
+        p.setTextAlign(right ? Paint.Align.RIGHT : Paint.Align.LEFT);
         p.setShadowLayer(10 * d, 0, 2 * d, 0x80000000);
         Ui.fit(p, t, w * 0.4f, h * 0.17f, tmp);
         p.getTextBounds(t, 0, t.length(), tmp);
-        float baseline = pad + tmp.height();
-        c.drawText(t, pad, baseline, p);
+        float timeH = tmp.height();
+        float x = right ? w - pad : pad;
+        float dateGap = h * 0.075f;
+        float baseline = bottom ? h - pad - dateGap - 4 * d : pad + timeH;
+        c.drawText(t, x, baseline, p);
         p.setTypeface(Ui.MEDIUM);
         p.setTextSize(h * 0.045f);
-        c.drawText(dateFmt.format(cal.getTime()), pad + 2 * d, baseline + h * 0.075f, p);
+        c.drawText(ds, right ? x - 2 * d : x + 2 * d, baseline + dateGap, p);
         p.clearShadowLayer();
+        p.setTextAlign(Paint.Align.LEFT);
     }
 
     private void kenBurns(Canvas c, Bitmap b, int w, int h, long age, int alpha) {

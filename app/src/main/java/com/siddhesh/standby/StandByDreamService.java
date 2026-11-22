@@ -1,5 +1,6 @@
 package com.siddhesh.standby;
 
+import android.content.Intent;
 import android.os.Build;
 import android.service.dreams.DreamService;
 import android.view.WindowInsets;
@@ -33,12 +34,28 @@ public class StandByDreamService extends DreamService implements StandByView.Hos
     }
 
     @Override
-    public void setNight(boolean night) {
-        setScreenBright(!night);
+    public void setBrightness(float level) {
+        if (getWindow() == null) return;
+        android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+        lp.screenBrightness = level < 0 ? android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                : Math.max(0.01f, Math.min(1f, level));
+        getWindow().setAttributes(lp);
     }
 
     @Override
     public void openDreamSettings() {
+    }
+
+    @Override
+    public void openSettings() {
+        // Leave the screen saver and open settings (the user unlocks first if needed).
+        Intent i = new Intent(this, SettingsActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            startActivity(i);
+        } catch (Exception ignored) {
+        }
+        finish();
     }
 
     @Override
