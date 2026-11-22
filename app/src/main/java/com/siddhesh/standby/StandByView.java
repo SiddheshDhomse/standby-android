@@ -167,24 +167,27 @@ public class StandByView extends View implements SensorEventListener {
     };
 
     /** Live updates from Settings, the Quick Settings tile, the alarm receiver and the to-do editor. */
-    private final SharedPreferences.OnSharedPreferenceChangeListener prefListener = (sp, key) -> {
+    private final SharedPreferences.OnSharedPreferenceChangeListener prefListener = this::onPrefChanged;
+
+    private void onPrefChanged(SharedPreferences sp, String key) {
         if (key == null) return;
         if (key.startsWith("pomo_")) {
-            this.pomodoro.reload();
+            pomodoro.reload();
         } else if (key.equals("todos")) {
-            this.todo.load();
-        } else if (key.equals("pageIndex") || key.equals("faceIndex") || key.startsWith("stack")
-                && !key.startsWith("stackItems") || key.startsWith("wx_") || key.startsWith("wp_")) {
+            todo.load();
+        } else if (key.equals("pageIndex") || key.equals("faceIndex")
+                || (key.startsWith("stack") && !key.startsWith("stackItems"))
+                || key.startsWith("wx_") || key.startsWith("wp_")) {
             return;
         } else {
-            this.settings.load();
+            settings.load();
             clampIndices();
-            if (key.equals("calendarIds")) this.agenda.invalidateCache();
+            if (key.equals("calendarIds")) agenda.invalidateCache();
             lastBrightness = -2f;
             keepOnKnown = false;
         }
         invalidate();
-    };
+    }
 
     public StandByView(Context ctx, Host host) {
         super(ctx);
