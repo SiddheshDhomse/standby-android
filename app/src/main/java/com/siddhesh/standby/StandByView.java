@@ -749,7 +749,10 @@ public class StandByView extends View implements SensorEventListener {
         float frac = pos - base;
         float radius = glass ? settings.glassRadius * d : 30 * d;
         c.save();
-        c.clipRect(r);
+        // clip to the card's rounded shape (a plain rectangle left dark square corners)
+        path.reset();
+        path.addRoundRect(r, radius, radius, Path.Direction.CW);
+        c.clipPath(path);
         for (int k = 0; k <= 1; k++) {
             float dy = (k - frac) * pitch;
             if (Math.abs(dy) >= pitch) continue;
@@ -758,10 +761,7 @@ public class StandByView extends View implements SensorEventListener {
             c.translate(0, dy);
             if (glass) {
                 // the card is drawn in translated space; undo the scroll so the blur lines up
-                c.save();
-                c.translate(0, 0);
-                liquid.card(c, new RectF(r), radius, now);
-                c.restore();
+                liquid.card(c, new RectF(r), radius, now, false);
             } else {
                 paint.setShader(null);
                 paint.setStyle(Paint.Style.FILL);

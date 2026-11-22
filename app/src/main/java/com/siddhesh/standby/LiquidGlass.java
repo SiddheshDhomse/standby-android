@@ -225,13 +225,18 @@ final class LiquidGlass {
 
     /** A glass panel. Call after drawBackground() during the same frame. */
     void card(Canvas c, RectF r, float radius, long now) {
+        card(c, r, radius, now, true);
+    }
+
+    /** @param withShadow false inside clipped areas (widget stacks), where a shadow would show as dark corners */
+    void card(Canvas c, RectF r, float radius, long now, boolean withShadow) {
         radius = Math.min(radius, Math.min(r.width(), r.height()) / 2f);
         if (rimPct < 0) rimPct = 60;
         path.reset();
         path.addRoundRect(r, radius, radius, Path.Direction.CW);
 
         // soft shadow underneath lifts the panel off the background
-        c.drawPath(path, shadow);
+        if (withShadow) c.drawPath(path, shadow);
 
         c.save();
         c.clipPath(path);
