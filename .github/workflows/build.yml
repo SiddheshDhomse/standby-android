@@ -65,6 +65,31 @@ jobs:
             echo "::error::$line"
           done
 
+      - name: Lint (code check, reported as annotations)
+        if: success()
+        continue-on-error: true
+        run: |
+          gradle :app:lintRelease --no-daemon --console=plain > lint.log 2>&1 || true
+          python3 - <<'PY'
+          import glob, collections
+          import xml.etree.ElementTree as ET
+          errs, warns = [], collections.OrderedDict()
+          for f in glob.glob('app/build/reports/lint-results*.xml'):
+              for i in ET.parse(f).getroot().iter('issue'):
+                  loc = i.find('location')
+                  where = (loc.get('file', '').split('/')[-1] + ':' + loc.get('line', '?')) if loc is not None else ''
+                  msg = f"{i.get('id')}: {i.get('message', '')[:180]} ({where})"
+                  if i.get('severity') in ('Error', 'Fatal'):
+                      errs.append(msg)
+                  else:
+                      warns.setdefault(i.get('id'), []).append(msg)
+          for m in errs[:10]:
+              print('::error::LINT ' + m)
+          for k, v in list(warns.items())[:10]:
+              print(f'::warning::LINT x{len(v)} ' + v[0])
+          print(f'lint: {len(errs)} errors, {sum(len(v) for v in warns.values())} warnings')
+          PY
+
       - name: Remove signing key
         if: always()
         run: rm -f "$RUNNER_TEMP/release.keystore"

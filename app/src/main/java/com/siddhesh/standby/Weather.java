@@ -193,7 +193,31 @@ final class Weather {
 
     // ------------------------------------------------------------ icons
 
+    private final RectF iconRect = new RectF();
+    private final Path moonA = new Path(), moonB = new Path();
+
+    /** Draws a weather icon. Leaves the paint in FILL style and touches no shared layout rects. */
     void icon(Canvas c, int code, boolean day, float cx, float cy, float s) {
+        try {
+            drawIcon(c, code, day, cx, cy, s);
+        } finally {
+            p.setShader(null);
+            p.setStyle(Paint.Style.FILL);
+        }
+    }
+
+    private void crescent(Canvas c, float x, float y, float r, int color) {
+        moonA.reset();
+        moonA.addCircle(x, y, r, Path.Direction.CW);
+        moonB.reset();
+        moonB.addCircle(x + r * 0.45f, y - r * 0.3f, r * 0.85f, Path.Direction.CW);
+        moonA.op(moonB, Path.Op.DIFFERENCE); // a real crescent: transparent bite, works on any background
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(color);
+        c.drawPath(moonA, p);
+    }
+
+    private void drawIcon(Canvas c, int code, boolean day, float cx, float cy, float s) {
         boolean clear = code == 0, partly = code == 1 || code == 2;
         boolean fog = code == 45 || code == 48;
         boolean rainy = (code >= 51 && code <= 67) || (code >= 80 && code <= 82);
@@ -217,11 +241,7 @@ final class Weather {
                     c.drawLine(x1, y1, x2, y2, p);
                 }
             } else {
-                p.setStyle(Paint.Style.FILL);
-                p.setColor(0xFFE5E5EA);
-                c.drawCircle(ox, oy, r, p);
-                p.setColor(0xFF000000);
-                c.drawCircle(ox + r * 0.45f, oy - r * 0.3f, r * 0.85f, p);
+                crescent(c, ox, oy, r, 0xFFE5E5EA);
             }
             if (clear) return;
         }
@@ -243,8 +263,8 @@ final class Weather {
         c.drawCircle(cx - s * 0.16f, cyc + s * 0.04f, s * 0.17f, p);
         c.drawCircle(cx + s * 0.04f, cyc - s * 0.06f, s * 0.22f, p);
         c.drawCircle(cx + s * 0.22f, cyc + s * 0.06f, s * 0.15f, p);
-        rf.set(cx - s * 0.33f, cyc + s * 0.02f, cx + s * 0.37f, cyc + s * 0.21f);
-        c.drawRoundRect(rf, s * 0.1f, s * 0.1f, p);
+        iconRect.set(cx - s * 0.33f, cyc + s * 0.02f, cx + s * 0.37f, cyc + s * 0.21f);
+        c.drawRoundRect(iconRect, s * 0.1f, s * 0.1f, p);
         if (rainy) {
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeCap(Paint.Cap.ROUND);
@@ -279,6 +299,9 @@ final class Weather {
     }
 
     void drawWidget(Canvas c, RectF r, Settings s) {
+        p.setShader(null);
+        p.setStyle(Paint.Style.FILL);
+        p.setLetterSpacing(0f);
         if (emptyState(c, r.centerX(), r.centerY(), r.width() * 0.85f, r.height() * 0.06f, s)) return;
         float pad = 22 * d;
         p.setTextAlign(Paint.Align.LEFT);
@@ -323,6 +346,9 @@ final class Weather {
     }
 
     void drawFace(Canvas c, int w, int h, Calendar cal, int accent, boolean h24, boolean glass, LiquidGlass lg, long now) {
+        p.setShader(null);
+        p.setStyle(Paint.Style.FILL);
+        p.setLetterSpacing(0f);
         if (emptyState(c, w / 2f, h / 2f, w * 0.8f, h * 0.05f, settingsRef)) return;
         boolean land = w >= h;
         float lx = land ? w * 0.07f : w * 0.08f;
@@ -356,40 +382,40 @@ final class Weather {
         if (!land) return;
         // right: hourly card + three small tiles
         float rx = w * 0.46f, rw = w * 0.47f;
-        rf.set(rx, h * 0.10f, rx + rw, h * 0.52f);
-        cardBg(c, rf, glass, lg, now);
+        RectF hc = new RectF(rx, h * 0.10f, rx + rw, h * 0.52f);
+        cardBg(c, hc, glass, lg, now);
         p.setTypeface(Ui.MEDIUM);
         p.setColor(Ui.GRAY);
         p.setTextSize(h * 0.035f);
-        c.drawText("NEXT HOURS", rf.left + 18 * d, rf.top + h * 0.075f, p);
+        c.drawText("NEXT HOURS", hc.left + 18 * d, hc.top + h * 0.075f, p);
         float cw = (rw - 36 * d) / 6f;
         for (int k = 0; k < 6; k++) {
-            float cx = rf.left + 18 * d + cw * (k + 0.5f);
+            float cx = hc.left + 18 * d + cw * (k + 0.5f);
             p.setTypeface(Ui.REGULAR);
             p.setColor(Ui.GRAY);
             p.setTextSize(h * 0.034f);
-            Ui.textCenter(c, p, hLabel[k] == null ? "" : hLabel[k], cx, rf.top + h * 0.15f, tmp);
-            icon(c, hCode[k], hDay[k], cx, rf.top + h * 0.24f, h * 0.09f);
+            Ui.textCenter(c, p, hLabel[k] == null ? "" : hLabel[k], cx, hc.top + h * 0.15f, tmp);
+            icon(c, hCode[k], hDay[k], cx, hc.top + h * 0.24f, h * 0.09f);
             p.setTypeface(Ui.MEDIUM);
             p.setColor(0xFFFFFFFF);
             p.setTextSize(h * 0.05f);
-            Ui.textCenter(c, p, hTemp[k] + "°", cx, rf.top + h * 0.34f, tmp);
+            Ui.textCenter(c, p, hTemp[k] + "°", cx, hc.top + h * 0.34f, tmp);
         }
         p.setTextAlign(Paint.Align.LEFT);
         String[][] tiles = {{"SUNSET", sunset}, {"HUMIDITY", humidity + "%"}, {"RAIN", rain + "%"}};
         float tw = (rw - 2 * 12 * d) / 3f;
         for (int i = 0; i < 3; i++) {
             float tx = rx + i * (tw + 12 * d);
-            rf.set(tx, h * 0.57f, tx + tw, h * 0.88f);
-            cardBg(c, rf, glass, lg, now);
+            RectF tile = new RectF(tx, h * 0.57f, tx + tw, h * 0.88f);
+            cardBg(c, tile, glass, lg, now);
             p.setTypeface(Ui.MEDIUM);
             p.setColor(Ui.GRAY);
             p.setTextSize(h * 0.032f);
-            c.drawText(tiles[i][0], rf.left + 14 * d, rf.top + h * 0.07f, p);
+            c.drawText(tiles[i][0], tile.left + 14 * d, tile.top + h * 0.07f, p);
             p.setTypeface(Ui.BOLD);
             p.setColor(0xFFFFFFFF);
             Ui.fitWidth(p, tiles[i][1], tw - 28 * d, h * 0.07f);
-            c.drawText(tiles[i][1], rf.left + 14 * d, rf.bottom - h * 0.06f, p);
+            c.drawText(tiles[i][1], tile.left + 14 * d, tile.bottom - h * 0.06f, p);
         }
     }
 
