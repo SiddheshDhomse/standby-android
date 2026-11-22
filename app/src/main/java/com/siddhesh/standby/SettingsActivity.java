@@ -210,7 +210,15 @@ public class SettingsActivity extends Activity {
             cb.setChecked(isOn);
             cb.setOnCheckedChangeListener((b, checked) -> {
                 List<Integer> nl = new ArrayList<>(on);
-                if (checked && !nl.contains(id)) nl.add(id);
+                if (checked && !nl.contains(id)) {
+                    if (key.equals("cities") && nl.size() >= WorldCities.MAX) {
+                        b.setChecked(false);
+                        android.widget.Toast.makeText(this, "Up to " + WorldCities.MAX + " cities",
+                                android.widget.Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    nl.add(id);
+                }
                 if (!checked) {
                     if (nl.size() <= 1) {
                         b.setChecked(true);
@@ -282,9 +290,16 @@ public class SettingsActivity extends Activity {
         root.removeAllViews();
         title("StandBy settings");
 
+        section("LIQUID GLASS");
+        toggle("Liquid Glass look", "Frosted glass over a slow, flowing background. Also a Quick Settings tile.",
+                s.glass, "glass");
+        choice("Glass colour", LiquidGlass.PALETTE_NAMES, s.glassPalette, v -> s.putInt("glassPalette", v));
+        if (!LiquidGlass.supported()) note("Real blur needs Android 12 or newer; you'll get a simpler frosted look.");
+        note("Quick Settings: swipe down twice \u2192 \u270E (edit) \u2192 drag \u201CLiquid Glass\u201D "
+                + "and \u201CStandBy\u201D into your tiles.");
+
         section("SCREEN");
         choice("Keep screen on", Settings.KEEP_NAMES, s.keepOn, v -> s.putInt("keepOn", v));
-        note("“Always on” keeps the display awake whenever StandBy is open, even on battery.");
         toggle("Use system brightness", "Turn off to set StandBy's own brightness", s.brightness < 0, checked -> {
             s.putInt("brightness", checked ? -1 : 60);
             build();
@@ -292,57 +307,90 @@ public class SettingsActivity extends Activity {
         if (s.brightness >= 0) {
             slider("Brightness", 1, 100, s.brightness, "%", v -> s.putInt("brightness", v));
         }
+        toggle("Double-tap to dim", "Double-tap an empty spot to dim or brighten", s.doubleTapDim, "doubleTapDim");
         toggle("Night mode (auto)", "In a dark room everything turns dim red", s.nightAuto, "nightAuto");
-        toggle("Burn-in protection", "Moves the picture a few pixels every minute", s.burnIn, "burnIn");
-        toggle("Show battery level", "Battery icon and % on the clock and photo views", s.showBattery, "showBattery");
+        toggle("Show battery level", "Battery icon and % on the clock view", s.showBattery, "showBattery");
         toggle("Charging animation", "Plays when you plug in the charger", s.chargeAnim, "chargeAnim");
+
+        section("BURN-IN PROTECTION");
+        toggle("Pixel drift", "Everything slowly moves up to ~24 px, on a new path every hour", s.burnIn, "burnIn");
+        toggle("Softer whites", "Draws white at 86% \u2014 barely visible, much less OLED wear", s.softWhites, "softWhites");
+        toggle("Auto-dim when idle", null, s.autoDim, "autoDim");
+        if (s.autoDim) slider("Dim after", 1, 30, s.autoDimMinutes, " min without a touch", v -> s.putInt("autoDimMinutes", v));
+        toggle("Fade extras", "Battery badge and mini-player hide after 30 s; touch to show", s.fadeExtras, "fadeExtras");
+        choice("Rotate clock faces", Settings.ROTATE_NAMES, s.faceRotate, v -> s.putInt("faceRotate", v));
+        toggle("Bedside mode at night", "Outline-only clock, about 3% of pixels lit. Touch to wake for a minute.",
+                s.bedside, "bedside");
+        if (s.bedside) {
+            choice("Bedside from", Settings.hourNames(), s.bedStart, v -> s.putInt("bedStart", v));
+            choice("Bedside until", Settings.hourNames(), s.bedEnd, v -> s.putInt("bedEnd", v));
+            choice("Bedside colour", Settings.INK_NAMES, s.bedInk, v -> s.putInt("bedInk", v));
+        }
+        toggle("Sleep window", "Screen goes fully dark during these hours \u2014 the strongest protection",
+                s.sleepWindow, "sleepWindow");
+        if (s.sleepWindow) {
+            choice("Dark from", Settings.hourNames(), s.sleepStart, v -> s.putInt("sleepStart", v));
+            choice("Dark until", Settings.hourNames(), s.sleepEnd, v -> s.putInt("sleepEnd", v));
+        }
 
         section("VIEWS & PLACEMENT");
         orderList("Views (swipe left/right)", Settings.PAGE_NAMES, s.pages, "pages");
         orderList("Left widget stack", Widgets.NAMES, s.stacks[0], "stackItems0");
         orderList("Right widget stack", Widgets.NAMES, s.stacks[1], "stackItems1");
-        button("⇄  Swap left and right stacks", () -> {
+        button("\u21C4  Swap left and right stacks", () -> {
             int[] a = s.stacks[0], b = s.stacks[1];
             s.putList("stackItems0", b);
             s.putList("stackItems1", a);
             build();
         });
         orderList("Clock faces (swipe up/down)", ClockFaces.NAMES, s.faces, "faces");
-        choice("Clock position on photos", Settings.CORNER_NAMES, s.photoCorner, v -> s.putInt("photoCorner", v));
 
-        section("WALLPAPER");
-        choice("Wallpaper from the internet", Settings.WP_NAMES, s.wallpaperSource, v -> {
-            s.putInt("wpSource", v);
-            Wallpaper.requestNew(this);
-        });
-        if (s.wallpaperSource != Settings.WP_NONE) {
-            choice("Change wallpaper", Settings.WP_MINUTE_NAMES, s.wallpaperInterval, v -> s.putInt("wpInterval", v));
-            slider("Darken wallpaper", 0, 90, s.wallpaperDim, "%", v -> s.putInt("wpDim", v));
-            toggle("Behind clock faces", null, s.wallpaperOnFaces, "wpFaces");
-            toggle("Behind widgets", null, s.wallpaperOnWidgets, "wpWidgets");
-            button("Get a new wallpaper now", () -> {
-                Wallpaper.requestNew(this);
-                android.widget.Toast.makeText(this, "A new wallpaper will load in a moment",
-                        android.widget.Toast.LENGTH_SHORT).show();
-            });
+        section("CALENDAR & TEAMS");
+        boolean cal = Agenda.hasPermission(this);
+        if (!cal) {
+            button("Allow calendar access", () -> requestPermissions(
+                    new String[]{android.Manifest.permission.READ_CALENDAR}, 2));
+        } else {
+            String which = s.calendarIds.isEmpty() ? "all calendars" : "selected calendars";
+            button("Choose calendars (now: " + which + ")", this::pickCalendars);
         }
-        note("Images are downloaded over HTTPS only from bing.com or picsum.photos. Nothing about you is sent.");
+        toggle("Hide details when locked", "Shows \u201CTeams meeting\u201D and task counts instead of titles",
+                s.hideDetailsLocked, "hideDetailsLocked");
+        note("Teams meetings live in your work Outlook calendar. Install Outlook, sign in with your work account, "
+                + "then Outlook \u2192 Settings \u2192 your account \u2192 turn on \u201CSync calendars\u201D. "
+                + "Pick that calendar above. Some companies block this \u2014 then it can't be shown. "
+                + "StandBy only reads events; nothing leaves your phone. \u201CJoin Teams\u201D appears 15 min before.");
 
-        section("NOW PLAYING (SPOTIFY)");
+        section("TO-DO");
+        button("Edit to-do list", () -> startActivity(new Intent(this, TodoActivity.class)));
+        note("Tasks are stored only on this phone. Tap a task in the widget to tick it off.");
+
+        section("WEATHER");
+        LinearLayout wr = row();
+        wr.addView(text("City", 16, TEXT));
+        wr.addView(text(s.weatherCity.isEmpty() ? "Not set \u2014 tap to choose" : s.weatherCity, 14, ACCENT));
+        wr.setClickable(true);
+        wr.setOnClickListener(v -> askCity());
+        note("From Open-Meteo: free, no account, no location permission. Only the city's coordinates are sent.");
+
+        section("WORLD CLOCK");
+        orderList("Cities (up to " + WorldCities.MAX + ")", WorldCities.NAMES, s.cities, "cities");
+
+        section("NOW PLAYING");
         boolean access = NowPlaying.hasAccess(this);
         LinearLayout st = row();
-        st.addView(text(access ? "✓ Notification access allowed" : "Notification access needed", 16,
+        st.addView(text(access ? "\u2713 Notification access allowed" : "Notification access needed", 16,
                 access ? 0xFF30D158 : 0xFFFF9F0A));
-        st.addView(text("Android only lets apps see the current song through this permission. "
+        st.addView(text("Needed to see the current song from Spotify, YouTube Music or any player. "
                 + "StandBy ignores all notification contents.", 13, SUB));
         if (!access) {
             button("Allow notification access", () ->
                     open(new Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));
-            note("Switch greyed out? Android blocks this for apps installed from a browser: "
-                    + "open App info below → ⋮ (top-right) → “Allow restricted settings”, then try again.");
             button("Open App info", () -> open(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                     Uri.fromParts("package", getPackageName(), null))));
         }
+        toggle("Switch to Now Playing automatically", "When music starts; switches back 30 s after it stops",
+                s.autoNowPlaying, "autoNowPlaying");
         toggle("Mini player on clock faces", "Shows the playing song at the bottom", s.nowPlayingPill, "nowPlayingPill");
 
         section("POMODORO");
@@ -352,30 +400,104 @@ public class SettingsActivity extends Activity {
         slider("Sessions before a long break", 2, 8, s.pomoRounds, "", v -> s.putInt("pomoRounds", v));
         toggle("Start the next session automatically", null, s.pomoAutoStart, "pomoAutoStart");
         toggle("Sound when a session ends", "It always vibrates", s.pomoSound, "pomoSound");
-
-        section("PRIVACY & PERMISSIONS");
-        toggle("Hide photos on the lock screen", "Anyone could see your gallery while the phone is locked",
-                s.hidePhotosLocked, "hidePhotosLocked");
-        boolean photos = PhotoSlideshow.hasPermission(this);
-        if (!photos) {
-            button("Allow access to photos", () -> requestPermissions(PhotoSlideshow.permissions(), 1));
+        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            button("Allow Pomodoro alerts (notifications)", () -> requestPermissions(
+                    new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 3));
         } else {
-            note("✓ Photo access allowed. You can remove it in App info → Permissions.");
+            note("\u2713 Alerts work even when StandBy is closed or the screen is off.");
+        }
+
+        section("WALLPAPER (WHEN LIQUID GLASS IS OFF)");
+        choice("Wallpaper from the internet", Settings.WP_NAMES, s.wallpaperSource, v -> {
+            s.putInt("wpSource", v);
+            Wallpaper.requestNew(this);
+        });
+        if (s.wallpaperSource != Settings.WP_NONE) {
+            choice("Change wallpaper", Settings.WP_MINUTE_NAMES, s.wallpaperInterval, v -> s.putInt("wpInterval", v));
+            slider("Darken wallpaper", 0, 90, s.wallpaperDim, "%", v -> s.putInt("wpDim", v));
+            toggle("Behind clock faces", null, s.wallpaperOnFaces, "wpFaces");
+            toggle("Behind widgets", null, s.wallpaperOnWidgets, "wpWidgets");
         }
 
         section("START AUTOMATICALLY");
-        note("Choose StandBy as your Screen saver and set it to start while charging. "
-                + "It then opens by itself whenever the phone charges and the screen would turn off.");
+        note("Choose StandBy as your Screen saver and set it to start while charging.");
         button("Open Screen saver settings", () -> open(new Intent(android.provider.Settings.ACTION_DREAM_SETTINGS)));
 
         section("ABOUT");
-        note("StandBy for Android 1.1 · no ads, no tracking. Internet is used only for wallpapers.");
+        note("StandBy for Android 1.2 \u00B7 no ads, no tracking. Internet is used only for weather and wallpapers.");
         button("Show the welcome tips again", () -> {
             s.putBool("helpSeen", false);
             finish();
         });
 
         scroll.post(() -> scroll.scrollTo(0, y));
+    }
+
+    private void pickCalendars() {
+        java.util.List<Agenda.Cal> cals = Agenda.listCalendars(this);
+        if (cals.isEmpty()) {
+            android.widget.Toast.makeText(this, "No calendars found on this phone", android.widget.Toast.LENGTH_LONG).show();
+            return;
+        }
+        String[] names = new String[cals.size()];
+        boolean[] checked = new boolean[cals.size()];
+        java.util.Set<String> sel = new java.util.HashSet<>(java.util.Arrays.asList(s.calendarIds.split(",")));
+        for (int i = 0; i < cals.size(); i++) {
+            Agenda.Cal c = cals.get(i);
+            names[i] = c.name + (c.account != null && !c.account.equals(c.name) ? "  (" + c.account + ")" : "");
+            checked[i] = s.calendarIds.isEmpty() || sel.contains(String.valueOf(c.id));
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Show events from")
+                .setMultiChoiceItems(names, checked, (dlg, which, isChecked) -> checked[which] = isChecked)
+                .setPositiveButton("Save", (dlg, which) -> {
+                    StringBuilder b = new StringBuilder();
+                    int n = 0;
+                    for (int i = 0; i < cals.size(); i++) {
+                        if (checked[i]) {
+                            if (n++ > 0) b.append(',');
+                            b.append(cals.get(i).id);
+                        }
+                    }
+                    // all ticked (or none) = show everything
+                    s.putString("calendarIds", n == cals.size() || n == 0 ? "" : b.toString());
+                    build();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void askCity() {
+        android.widget.EditText in = new android.widget.EditText(this);
+        in.setSingleLine(true);
+        in.setHint("e.g. Pune");
+        in.setText(s.weatherCity.contains(",") ? s.weatherCity.substring(0, s.weatherCity.indexOf(',')) : s.weatherCity);
+        in.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(60)});
+        new AlertDialog.Builder(this)
+                .setTitle("Weather city")
+                .setView(in)
+                .setPositiveButton("Save", (dlg, which) -> {
+                    String q = in.getText().toString().trim();
+                    if (q.isEmpty()) return;
+                    new Thread(() -> {
+                        String[] r = Weather.geocode(q);
+                        runOnUiThread(() -> {
+                            if (r == null) {
+                                android.widget.Toast.makeText(this, "Couldn't find \u201C" + q + "\u201D (or no internet)",
+                                        android.widget.Toast.LENGTH_LONG).show();
+                                return;
+                            }
+                            s.sp.edit().putString("weatherCity", r[0])
+                                    .putFloat("weatherLat", Float.parseFloat(r[1]))
+                                    .putFloat("weatherLon", Float.parseFloat(r[2])).apply();
+                            s.load();
+                            build();
+                        });
+                    }, "geocode").start();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     @Override

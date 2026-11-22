@@ -36,6 +36,9 @@ final class Ui {
     static final Typeface REGULAR = Typeface.create("sans-serif", Typeface.NORMAL);
     static final Typeface LIGHT = Typeface.create("sans-serif-light", Typeface.NORMAL);
 
+    /** Set while drawing over Liquid Glass: dark clock faces become see-through. */
+    static boolean transparentFaces;
+
     static int accent(int idx) {
         return ACCENTS[Math.floorMod(idx, ACCENTS.length)];
     }
@@ -106,8 +109,13 @@ final class Ui {
         int fg = lightFace ? 0xFF000000 : 0xFFFFFFFF;
         p.setShader(null);
         p.setStyle(Paint.Style.FILL);
-        p.setColor(lightFace ? 0xFFFFFFFF : 0xFF000000);
-        c.drawCircle(cx, cy, r, p);
+        if (lightFace || !transparentFaces) {
+            p.setColor(lightFace ? 0xFFFFFFFF : 0xFF000000);
+            c.drawCircle(cx, cy, r, p);
+        } else {
+            p.setColor(0x0DFFFFFF);
+            c.drawCircle(cx, cy, r, p);
+        }
 
         // ticks
         p.setStyle(Paint.Style.STROKE);

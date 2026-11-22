@@ -84,6 +84,38 @@ public class StandByActivity extends Activity implements StandByView.Host {
     }
 
     @Override
+    public void openTodo() {
+        runUnlocked(() -> startActivity(new Intent(this, TodoActivity.class)));
+    }
+
+    @Override
+    public void openUrl(String url) {
+        if (!Agenda.isSafeJoinUrl(url)) return; // only Teams meeting links
+        runUnlocked(() -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                        .addCategory(Intent.CATEGORY_BROWSABLE));
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
+    /** Asks the user to unlock first when StandBy is showing over the lock screen. */
+    private void runUnlocked(Runnable r) {
+        android.app.KeyguardManager km = (android.app.KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+        if (km != null && km.isKeyguardLocked()) {
+            km.requestDismissKeyguard(this, new android.app.KeyguardManager.KeyguardDismissCallback() {
+                @Override
+                public void onDismissSucceeded() {
+                    r.run();
+                }
+            });
+        } else {
+            r.run();
+        }
+    }
+
+    @Override
     public void openDreamSettings() {
         try {
             startActivity(new Intent(Settings.ACTION_DREAM_SETTINGS));

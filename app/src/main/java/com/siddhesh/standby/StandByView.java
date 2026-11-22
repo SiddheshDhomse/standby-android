@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.ColorMatrix;
 import android.graphics.ColorMatrixColorFilter;
@@ -34,7 +35,7 @@ import java.util.Calendar;
  *
  * Pages (swipe left/right, order set in Settings): Widgets · Photos · Clock.
  * Swipe up/down: change the widget in a stack, the photo, or the clock face.
- * Long-press: colours, night mode, settings.
+ * Long-press: colours, night mode, settings. Double-tap: dim / undim.
  */
 public class StandByView extends View implements SensorEventListener {
 
@@ -43,6 +44,8 @@ public class StandByView extends View implements SensorEventListener {
         void setBrightness(float level);
         void openDreamSettings();
         void openSettings();
+        void openTodo();
+        void openUrl(String url);
         void requestPhotoPermission();
         void exit();
         boolean isActivity();
@@ -53,11 +56,17 @@ public class StandByView extends View implements SensorEventListener {
     private static final int DRAG_NONE = 0, DRAG_H = 1, DRAG_V = 2, DRAG_IGNORE = 3;
     private static final int VT_STACK0 = 0, VT_STACK1 = 1, VT_FACE = 2, VT_PHOTO = 3, VT_EXIT = 4;
     private static final long CHARGE_ANIM_MS = 3200;
+    private static final long EXTRAS_VISIBLE_MS = 30_000;
+    private static final long WAKE_FROM_NIGHT_MS = 60_000;
 
     private final Host host;
     final Settings settings;
     final Pomodoro pomodoro;
     final NowPlaying nowPlaying;
+    final Weather weather;
+    final Agenda agenda;
+    final Todo todo;
+    final LiquidGlass liquid;
     private final Wallpaper wallpaper;
     private final float d;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -73,12 +82,13 @@ public class StandByView extends View implements SensorEventListener {
 
     // navigation state (indices are unbounded ints; wrapped with floorMod when used)
     private int page;            // index into settings.pages
-    private float pagePos;
+    private float pagePos, pageVel;
     private final int[] stackIdx = new int[2];
     private final float[] stackPos = new float[2];
+    private final float[] stackVel = new float[2];
     private final long[] stackDotsUntil = new long[2];
     private int faceIdx;         // index into settings.faces
-    private float facePos;
+    private float facePos, faceVel;
     private long faceDotsUntil;
     private long pageDotsUntil;
 
@@ -87,6 +97,7 @@ public class StandByView extends View implements SensorEventListener {
     int batteryPct = -1;
     boolean charging;
     boolean full;
+    float driftX, driftY;
     private boolean batteryKnown;
     private boolean night;
     private float lux = -1f;
@@ -98,13 +109,31 @@ public class StandByView extends View implements SensorEventListener {
     private long lockCheckedAt;
     private boolean locked;
 
+    // burn-in / dimming
+    private long lastTouchAt = System.currentTimeMillis();
+    private boolean manualDim;
+    private long lastEmptyTapAt;
+    private float lastEmptyTapX, lastEmptyTapY;
+    private long nightWakeUntil;
+    private float lastBrightness = -2f;
+    private boolean lastKeepOn;
+    private boolean keepOnKnown;
+    private long rotateSlot = -1;
+    private boolean bedsideActive, sleepActive;
+
+    // auto Now Playing
+    private boolean lastPlaying;
+    private boolean autoSwitched;
+    private int prevPage, prevFace;
+    private long stoppedAt;
+
     // overlays
     private boolean showCustomize;
     private boolean showHelp;
     private final RectF[] colorHits = new RectF[Ui.ACCENTS.length];
     private final RectF panel = new RectF();
     private final RectF btnNight = new RectF(), btnSettings = new RectF(), btnDone = new RectF();
-    private final RectF helpAuto = new RectF(), helpPhotos = new RectF(), helpOk = new RectF();
+    private final RectF helpAuto = new RectF(), helpSettings = new RectF(), helpOk = new RectF();
     private final RectF pillRect = new RectF();
 
     // touch
@@ -114,6 +143,7 @@ public class StandByView extends View implements SensorEventListener {
     private float downX, downY, lastX, lastY, velX, velY;
     private long lastT;
     private boolean longPressFired;
+    private boolean swallowTouch;
     private long lastFrame;
 
     private boolean attached;
@@ -121,7 +151,7 @@ public class StandByView extends View implements SensorEventListener {
 
     private final Runnable tick = this::invalidate;
     private final Runnable longPress = () -> {
-        if (dragMode == DRAG_NONE && !showHelp && !showCustomize) {
+        if (dragMode == DRAG_NONE && !showHelp && !showCustomize && !swallowTouch) {
             longPressFired = true;
             showCustomize = true;
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
@@ -136,6 +166,26 @@ public class StandByView extends View implements SensorEventListener {
         }
     };
 
+    /** Live updates from Settings, the Quick Settings tile, the alarm receiver and the to-do editor. */
+    private final SharedPreferences.OnSharedPreferenceChangeListener prefListener = (sp, key) -> {
+        if (key == null) return;
+        if (key.startsWith("pomo_")) {
+            pomodoro.reload();
+        } else if (key.equals("todos")) {
+            todo.load();
+        } else if (key.equals("pageIndex") || key.equals("faceIndex") || key.startsWith("stack")
+                && !key.startsWith("stackItems") || key.startsWith("wx_") || key.startsWith("wp_")) {
+            return;
+        } else {
+            settings.load();
+            clampIndices();
+            if (key.equals("calendarIds")) agenda.invalidateCache();
+            lastBrightness = -2f;
+            keepOnKnown = false;
+        }
+        invalidate();
+    };
+
     public StandByView(Context ctx, Host host) {
         super(ctx);
         this.host = host;
@@ -144,44 +194,42 @@ public class StandByView extends View implements SensorEventListener {
         settings = new Settings(ctx);
         pomodoro = new Pomodoro(ctx, d);
         nowPlaying = new NowPlaying(ctx, this::postInvalidate);
+        weather = new Weather(ctx, this::postInvalidate, d);
+        weather.setSettings(settings);
+        agenda = new Agenda(ctx, this::postInvalidate, d);
+        todo = new Todo(ctx, d);
+        liquid = new LiquidGlass(d);
         wallpaper = new Wallpaper(ctx, this::postInvalidate);
         widgets = new Widgets(d);
         faces = new ClockFaces(d);
         photos = new PhotoSlideshow(ctx, this, d);
         for (int i = 0; i < colorHits.length; i++) colorHits[i] = new RectF();
 
-        android.content.SharedPreferences sp = settings.sp;
+        SharedPreferences sp = settings.sp;
         page = sp.getInt("pageIndex", settings.pages.length - 1);
         stackIdx[0] = sp.getInt("stack0", 0);
         stackIdx[1] = sp.getInt("stack1", 0);
         faceIdx = sp.getInt("faceIndex", 0);
-        clampNav();
+        clampIndices();
         pagePos = page;
         stackPos[0] = stackIdx[0];
         stackPos[1] = stackIdx[1];
         facePos = faceIdx;
         showHelp = host.isActivity() && !sp.getBoolean("helpSeen", false);
-
-        // Night mode: map everything to its brightness, in red only.
-        ColorMatrix cm = new ColorMatrix(new float[]{
-                0.33f, 0.59f, 0.11f, 0, 0,
-                0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0,
-                0, 0, 0, 1, 0,
-        });
-        layerPaint.setColorFilter(new ColorMatrixColorFilter(cm));
         setHapticFeedbackEnabled(true);
     }
 
-    private void clampNav() {
-        page = Math.floorMod(page, settings.pages.length);
-        stackIdx[0] = Math.floorMod(stackIdx[0], settings.stacks[0].length);
-        stackIdx[1] = Math.floorMod(stackIdx[1], settings.stacks[1].length);
-        faceIdx = Math.floorMod(faceIdx, settings.faces.length);
-        pagePos = Math.max(0, Math.min(settings.pages.length - 1, pagePos));
-        stackPos[0] = stackIdx[0];
-        stackPos[1] = stackIdx[1];
-        facePos = faceIdx;
+    private void clampIndices() {
+        int p = Math.floorMod(page, settings.pages.length);
+        if (p != page) { page = p; pagePos = p; pageVel = 0; }
+        for (int s = 0; s < 2; s++) {
+            int n = settings.stacks[s].length;
+            int si = Math.floorMod(stackIdx[s], n);
+            if (si != stackIdx[s]) { stackIdx[s] = si; stackPos[s] = si; stackVel[s] = 0; }
+        }
+        int f = Math.floorMod(faceIdx, settings.faces.length);
+        if (f != faceIdx) { faceIdx = f; facePos = f; faceVel = 0; }
+        if (pagePos > settings.pages.length - 1) pagePos = settings.pages.length - 1;
     }
 
     int pageType(int idx) {
@@ -191,6 +239,16 @@ public class StandByView extends View implements SensorEventListener {
 
     int currentFace() {
         return settings.faces[Math.floorMod(faceIdx, settings.faces.length)];
+    }
+
+    private int pageIndexOf(int type) {
+        for (int i = 0; i < settings.pages.length; i++) if (settings.pages[i] == type) return i;
+        return -1;
+    }
+
+    private int faceIndexOf(int face) {
+        for (int i = 0; i < settings.faces.length; i++) if (settings.faces[i] == face) return i;
+        return -1;
     }
 
     // ------------------------------------------------------------------ lifecycle
@@ -214,9 +272,11 @@ public class StandByView extends View implements SensorEventListener {
             Sensor light = sensors.getDefaultSensor(Sensor.TYPE_LIGHT);
             if (light != null) sensors.registerListener(this, light, SensorManager.SENSOR_DELAY_NORMAL);
         }
+        settings.sp.registerOnSharedPreferenceChangeListener(prefListener);
         photos.refresh();
         nowPlaying.start();
-        applyDisplaySettings();
+        lastTouchAt = System.currentTimeMillis();
+        applyDisplay(System.currentTimeMillis(), Calendar.getInstance());
         invalidate();
     }
 
@@ -228,6 +288,7 @@ public class StandByView extends View implements SensorEventListener {
         } catch (Exception ignored) {
         }
         if (sensors != null) sensors.unregisterListener(this);
+        settings.sp.unregisterOnSharedPreferenceChangeListener(prefListener);
         nowPlaying.stop();
         removeCallbacks(tick);
         removeCallbacks(longPress);
@@ -238,18 +299,27 @@ public class StandByView extends View implements SensorEventListener {
     /** Called by the Activity when it resumes (settings may have changed) or a permission result arrives. */
     public void onHostResume() {
         settings.load();
-        clampNav();
+        clampIndices();
+        todo.load();
+        pomodoro.reload();
+        agenda.invalidateCache();
         photos.refresh();
         nowPlaying.stop();
         nowPlaying.start();
         alarmCheckedAt = 0;
         lockCheckedAt = 0;
-        applyDisplaySettings();
+        lastBrightness = -2f;
+        keepOnKnown = false;
+        lastTouchAt = System.currentTimeMillis();
         invalidate();
     }
 
     boolean canAskPermission() {
         return host.isActivity();
+    }
+
+    boolean hideDetails() {
+        return settings.hideDetailsLocked && isLocked();
     }
 
     @Override
@@ -259,15 +329,52 @@ public class StandByView extends View implements SensorEventListener {
         wallpaper.setScreenSize(w, h);
     }
 
-    private void applyDisplaySettings() {
+    /** Keep-screen-on and brightness, recomputed every frame but applied only on change. */
+    private void applyDisplay(long now, Calendar cal) {
         boolean keep;
         if (!host.isActivity()) keep = true;
+        else if (sleepActive) keep = false; // let the screen turn off in the sleep window
         else if (settings.keepOn == Settings.KEEP_ALWAYS) keep = true;
         else if (settings.keepOn == Settings.KEEP_CHARGING) keep = charging;
         else keep = false;
-        setKeepScreenOn(keep);
-        float b = night ? 0.01f : (settings.brightness < 0 ? -1f : settings.brightness / 100f);
-        host.setBrightness(b);
+        if (!keepOnKnown || keep != lastKeepOn) {
+            setKeepScreenOn(keep);
+            lastKeepOn = keep;
+            keepOnKnown = true;
+        }
+
+        float b;
+        if (sleepActive || night) {
+            b = 0.01f;
+        } else {
+            float base = settings.brightness < 0 ? -1f : settings.brightness / 100f;
+            float factor = 1f;
+            if (bedsideActive) factor = Math.min(factor, 0.15f);
+            if (manualDim) factor = Math.min(factor, 0.3f);
+            if (settings.autoDim && now - lastTouchAt > settings.autoDimMinutes * 60_000L) {
+                factor = Math.min(factor, 0.35f);
+            }
+            if (factor < 1f) {
+                if (base < 0) base = systemBrightness();
+                b = Math.max(0.01f, base * factor);
+            } else {
+                b = base;
+            }
+        }
+        if (Math.abs(b - lastBrightness) > 0.001f) {
+            lastBrightness = b;
+            host.setBrightness(b);
+        }
+    }
+
+    private float systemBrightness() {
+        try {
+            int v = android.provider.Settings.System.getInt(getContext().getContentResolver(),
+                    android.provider.Settings.System.SCREEN_BRIGHTNESS);
+            return Math.max(0.05f, Math.min(1f, v / 255f));
+        } catch (Exception e) {
+            return 0.5f;
+        }
     }
 
     // ------------------------------------------------------------------ live data
@@ -286,7 +393,7 @@ public class StandByView extends View implements SensorEventListener {
             performHapticFeedback(HapticFeedbackConstants.CONFIRM);
         }
         batteryKnown = true;
-        applyDisplaySettings();
+        keepOnKnown = false;
         chargeCheckedAt = 0;
         invalidate();
     }
@@ -313,6 +420,7 @@ public class StandByView extends View implements SensorEventListener {
             try {
                 AlarmManager am = (AlarmManager) getContext().getSystemService(Context.ALARM_SERVICE);
                 AlarmManager.AlarmClockInfo info = am == null ? null : am.getNextAlarmClock();
+                // our own Pomodoro alarm is not an "alarm clock", so it never shows here
                 if (info != null) {
                     Calendar a = Calendar.getInstance();
                     a.setTimeInMillis(info.getTriggerTime());
@@ -362,9 +470,88 @@ public class StandByView extends View implements SensorEventListener {
         else if (night && lux > 12f) n = false;
         if (n != night) {
             night = n;
-            applyDisplaySettings();
             invalidate();
         }
+    }
+
+    // ------------------------------------------------------------------ animation
+
+    /** Critically-damped-ish spring with a little bounce. Returns {pos, vel}. */
+    private static float[] spring(float pos, float vel, float target, float dt) {
+        final float k = 210f, c = 2f * (float) Math.sqrt(k) * 0.78f;
+        int steps = 4;
+        float h = dt / steps;
+        for (int i = 0; i < steps; i++) {
+            float a = k * (target - pos) - c * vel;
+            vel += a * h;
+            pos += vel * h;
+        }
+        if (Math.abs(target - pos) < 0.0015f && Math.abs(vel) < 0.01f) {
+            pos = target;
+            vel = 0f;
+        }
+        return new float[]{pos, vel};
+    }
+
+    private void updateModes(long now, Calendar cal) {
+        float hour = cal.get(Calendar.HOUR_OF_DAY) + cal.get(Calendar.MINUTE) / 60f;
+        boolean awake = now < nightWakeUntil;
+        sleepActive = !awake && settings.sleepWindow && Settings.inWindow(hour, settings.sleepStart, settings.sleepEnd);
+        bedsideActive = !awake && !sleepActive && settings.bedside
+                && Settings.inWindow(hour, settings.bedStart, settings.bedEnd);
+
+        // burn-in drift: up to ~24 px (9 dp), a fresh path every hour
+        if (settings.burnIn) {
+            int minute = cal.get(Calendar.MINUTE);
+            int hourSeed = cal.get(Calendar.HOUR_OF_DAY) + cal.get(Calendar.DAY_OF_YEAR) * 24;
+            double phase = minute / 60.0 * Math.PI * 2;
+            double a = hourSeed * 2.399963; // golden angle: each hour starts somewhere new
+            float r = 9 * d;
+            driftX = (float) (Math.sin(phase + a) * r);
+            driftY = (float) (Math.sin(phase * 2 + a * 1.7) * r * 0.6);
+        } else {
+            driftX = driftY = 0;
+        }
+
+        // face rotation
+        int hrs = Settings.ROTATE_HOURS[settings.faceRotate];
+        if (hrs > 0) {
+            long slot = now / (hrs * 3_600_000L);
+            if (rotateSlot >= 0 && slot != rotateSlot && dragMode == DRAG_NONE && !autoSwitched) {
+                faceIdx++;
+                settings.sp.edit().putInt("faceIndex", Math.floorMod(faceIdx, settings.faces.length)).apply();
+            }
+            rotateSlot = slot;
+        } else {
+            rotateSlot = -1;
+        }
+
+        // Now Playing takes over while music plays, then hands back
+        boolean playing = nowPlaying.active() && nowPlaying.playing;
+        if (settings.autoNowPlaying && playing && !lastPlaying && !autoSwitched && dragMode == DRAG_NONE) {
+            int pi = pageIndexOf(PAGE_CLOCK), fi = faceIndexOf(ClockFaces.NOW_PLAYING);
+            if (pi >= 0 && fi >= 0 && !(page == pi && Math.floorMod(faceIdx, settings.faces.length) == fi)) {
+                prevPage = page;
+                prevFace = faceIdx;
+                page = pi;
+                faceIdx = fi;
+                autoSwitched = true;
+            }
+        }
+        if (autoSwitched) {
+            if (playing) {
+                stoppedAt = 0;
+            } else {
+                if (stoppedAt == 0) stoppedAt = now;
+                if (now - stoppedAt > 30_000) {
+                    page = Math.min(prevPage, settings.pages.length - 1);
+                    faceIdx = prevFace;
+                    autoSwitched = false;
+                    stoppedAt = 0;
+                }
+            }
+        }
+        lastPlaying = playing;
     }
 
     // ------------------------------------------------------------------ drawing
@@ -375,46 +562,92 @@ public class StandByView extends View implements SensorEventListener {
         float dt = lastFrame == 0 ? 0.016f : Math.min(0.05f, (now - lastFrame) / 1000f);
         lastFrame = now;
         h24 = DateFormat.is24HourFormat(getContext());
+        Calendar cal = Calendar.getInstance();
         pomodoro.tick(now, settings);
         wallpaper.ensure(settings);
+        weather.ensure(settings);
+        agenda.ensure(settings);
+        updateModes(now, cal);
+        applyDisplay(now, cal);
+        Ui.transparentFaces = settings.glass;
 
         boolean animating = false;
         if (dragMode != DRAG_H) {
-            pagePos = approach(pagePos, page, dt);
+            float[] r = spring(pagePos, pageVel, page, dt);
+            pagePos = r[0];
+            pageVel = r[1];
             animating |= pagePos != page;
         }
         for (int s = 0; s < 2; s++) {
             if (!(dragMode == DRAG_V && vTarget == s)) {
-                stackPos[s] = approach(stackPos[s], stackIdx[s], dt);
+                float[] r = spring(stackPos[s], stackVel[s], stackIdx[s], dt);
+                stackPos[s] = r[0];
+                stackVel[s] = r[1];
                 animating |= stackPos[s] != stackIdx[s];
             }
         }
         if (!(dragMode == DRAG_V && vTarget == VT_FACE)) {
-            facePos = approach(facePos, faceIdx, dt);
+            float[] r = spring(facePos, faceVel, faceIdx, dt);
+            facePos = r[0];
+            faceVel = r[1];
             animating |= facePos != faceIdx;
         }
 
         int w = getWidth(), h = getHeight();
-        Calendar cal = Calendar.getInstance();
         c.drawColor(0xFF000000);
 
-        int save = night ? c.saveLayer(null, layerPaint) : -1;
-        int n = settings.pages.length;
-        boolean faceAnim = false;
-        for (int p = 0; p < n; p++) {
-            float off = (p - pagePos) * w;
-            if (Math.abs(off) >= w) continue;
-            c.save();
-            c.translate(off, 0);
-            c.clipRect(0, 0, w, h);
-            faceAnim |= drawPage(c, pageType(p), w, h, cal, now);
-            c.restore();
+        if (sleepActive) {
+            // nothing lit at all; the screen turns off on its own (app) or stays black (screen saver)
+            scheduleNext(false, false, now);
+            return;
         }
-        int curType = pageType(Math.round(Math.max(0, Math.min(n - 1, pagePos))));
-        if (settings.showBattery && curType != PAGE_WIDGETS) drawBatteryBadge(c, w);
-        if (curType == PAGE_CLOCK) drawNowPlayingPill(c, w, h);
-        else pillRect.setEmpty();
-        if (n > 1 && (now < pageDotsUntil || dragMode == DRAG_H)) drawPageDots(c, w, h);
+
+        boolean useLayer = night || settings.softWhites;
+        if (useLayer) {
+            ColorMatrix cm;
+            if (night) {
+                cm = new ColorMatrix(new float[]{
+                        0.33f, 0.59f, 0.11f, 0, 0,
+                        0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0,
+                        0, 0, 0, 1, 0});
+            } else {
+                float k = 0.86f; // softer whites: slower OLED ageing, hardly visible
+                cm = new ColorMatrix(new float[]{
+                        k, 0, 0, 0, 0,
+                        0, k, 0, 0, 0,
+                        0, 0, k, 0, 0,
+                        0, 0, 0, 1, 0});
+            }
+            layerPaint.setColorFilter(new ColorMatrixColorFilter(cm));
+        }
+        int save = useLayer ? c.saveLayer(null, layerPaint) : -1;
+
+        boolean faceAnim = false;
+        boolean glassVisible = false;
+        if (bedsideActive) {
+            faces.bedside(c, w, h, cal, this);
+        } else {
+            int n = settings.pages.length;
+            for (int p = 0; p < n; p++) {
+                float off = (p - pagePos) * w;
+                if (Math.abs(off) >= w) continue;
+                c.save();
+                c.translate(off, 0);
+                c.clipRect(0, 0, w, h);
+                int type = pageType(p);
+                faceAnim |= drawPage(c, type, w, h, cal, now);
+                if (type != PAGE_PHOTOS && (settings.glass
+                        || (type == PAGE_CLOCK && currentFace() == ClockFaces.GLASS))) glassVisible = true;
+                c.restore();
+            }
+            boolean extras = !settings.fadeExtras || now - lastTouchAt < EXTRAS_VISIBLE_MS;
+            int curType = pageType(Math.round(Math.max(0, Math.min(n - 1, pagePos))));
+            if (extras && settings.showBattery && curType != PAGE_WIDGETS) drawBatteryBadge(c, w);
+            if (extras && curType == PAGE_CLOCK) drawNowPlayingPill(c, w, h);
+            else pillRect.setEmpty();
+            if (n > 1 && (now < pageDotsUntil || dragMode == DRAG_H)) drawPageDots(c, w, h);
+        }
         boolean chargeAnim = now - chargeAnimStart < CHARGE_ANIM_MS;
         if (chargeAnim) drawChargeAnim(c, w, h, now);
         if (save != -1) c.restoreToCount(save);
@@ -422,15 +655,21 @@ public class StandByView extends View implements SensorEventListener {
         if (showCustomize) drawCustomize(c, w, h);
         if (showHelp) drawHelp(c, w, h);
 
-        boolean photosVisible = visible(PAGE_PHOTOS);
-        boolean continuous = animating || dragMode != DRAG_NONE || chargeAnim || faceAnim
+        boolean photosVisible = !bedsideActive && visible(PAGE_PHOTOS);
+        boolean fast = animating || dragMode != DRAG_NONE || chargeAnim || faceAnim
                 || (photosVisible && photos.animating())
                 || now < pageDotsUntil || now < faceDotsUntil
                 || now < stackDotsUntil[0] || now < stackDotsUntil[1]
                 || now < pomodoro.flashUntil;
+        scheduleNext(fast, glassVisible && !bedsideActive, now);
+    }
+
+    private void scheduleNext(boolean fast, boolean glass, long now) {
         removeCallbacks(tick);
-        if (continuous) {
+        if (fast) {
             postInvalidateOnAnimation();
+        } else if (glass) {
+            postDelayed(tick, 40); // ~25 fps is plenty for the slow liquid background
         } else if (attached) {
             postDelayed(tick, 1000 - (now % 1000) + 5);
         }
@@ -443,33 +682,28 @@ public class StandByView extends View implements SensorEventListener {
         return false;
     }
 
-    private static float approach(float cur, float target, float dt) {
-        float diff = target - cur;
-        if (Math.abs(diff) < 0.002f) return target;
-        return cur + diff * Math.min(1f, dt * 13f);
-    }
-
-    private void burnInShift(Canvas c, Calendar cal) {
-        if (!settings.burnIn) return;
-        int minute = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE);
-        float s = 5 * d;
-        c.translate((float) Math.sin(minute * 0.37) * s, (float) Math.cos(minute * 0.53) * s);
+    private void burnInShift(Canvas c) {
+        c.translate(driftX, driftY);
     }
 
     /** Returns true if the page needs continuous animation. */
     private boolean drawPage(Canvas c, int type, int w, int h, Calendar cal, long now) {
         switch (type) {
-            case PAGE_WIDGETS:
-                boolean wp = settings.wallpaperOnWidgets && wallpaper.bitmap() != null;
-                if (wp) wallpaper.draw(c, w, h, settings.wallpaperDim);
-                burnInShift(c, cal);
+            case PAGE_WIDGETS: {
+                boolean glass = settings.glass;
+                boolean wp = !glass && settings.wallpaperOnWidgets && wallpaper.bitmap() != null;
+                if (glass) liquid.drawBackground(c, w, h, now, settings.glassPalette);
+                else if (wp) wallpaper.draw(c, w, h, settings.wallpaperDim);
+                burnInShift(c);
                 layoutCards(w, h);
-                for (int s = 0; s < 2; s++) drawStack(c, s, cal, now, wp);
+                for (int s = 0; s < 2; s++) drawStack(c, s, cal, now, wp, glass);
                 return false;
-            case PAGE_PHOTOS:
+            }
+            case PAGE_PHOTOS: {
                 boolean hidden = settings.hidePhotosLocked && isLocked();
                 photos.draw(c, w, h, now, cal, h24, hidden, settings.photoCorner);
                 return false;
+            }
             case PAGE_CLOCK:
                 return drawFaces(c, w, h, cal, now);
         }
@@ -489,7 +723,7 @@ public class StandByView extends View implements SensorEventListener {
         }
     }
 
-    private void drawStack(Canvas c, int s, Calendar cal, long now, boolean overWallpaper) {
+    private void drawStack(Canvas c, int s, Calendar cal, long now, boolean overWallpaper, boolean glass) {
         RectF r = cards[s];
         int[] stack = settings.stacks[s];
         float gap = 14 * d;
@@ -506,10 +740,18 @@ public class StandByView extends View implements SensorEventListener {
             int type = stack[Math.floorMod(base + k, stack.length)];
             c.save();
             c.translate(0, dy);
-            paint.setShader(null);
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(overWallpaper ? 0xB31C1C1E : Ui.CARD);
-            c.drawRoundRect(r, radius, radius, paint);
+            if (glass) {
+                // the card is drawn in translated space; undo the scroll so the blur lines up
+                c.save();
+                c.translate(0, 0);
+                liquid.card(c, new RectF(r), radius, now);
+                c.restore();
+            } else {
+                paint.setShader(null);
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(overWallpaper ? 0xB31C1C1E : Ui.CARD);
+                c.drawRoundRect(r, radius, radius, paint);
+            }
             widgets.draw(c, type, r, cal, this, s, now);
             c.restore();
         }
@@ -524,8 +766,11 @@ public class StandByView extends View implements SensorEventListener {
         int[] list = settings.faces;
         int base = (int) Math.floor(facePos);
         float frac = facePos - base;
-        boolean wpReady = settings.wallpaperOnFaces && wallpaper.bitmap() != null;
-        if (wpReady) wallpaper.draw(c, w, h, settings.wallpaperDim);
+        if (settings.glass) {
+            liquid.drawBackground(c, w, h, now, settings.glassPalette);
+        } else if (settings.wallpaperOnFaces && wallpaper.bitmap() != null) {
+            wallpaper.draw(c, w, h, settings.wallpaperDim);
+        }
         boolean anim = false;
         for (int k = 0; k <= 1; k++) {
             float dy = (k - frac) * h;
@@ -534,7 +779,7 @@ public class StandByView extends View implements SensorEventListener {
             c.save();
             c.translate(0, dy);
             c.clipRect(0, 0, w, h);
-            if (!ClockFaces.ownBackground(face)) burnInShift(c, cal);
+            if (!ClockFaces.ownBackground(face)) burnInShift(c);
             faces.draw(c, face, w, h, cal, Ui.accent(settings.faceAccent[face]), now, this);
             anim |= faces.continuous(face, now);
             c.restore();
@@ -620,9 +865,13 @@ public class StandByView extends View implements SensorEventListener {
         float pw = tw + ph + 30 * d;
         float top = h - ph - 22 * d;
         pillRect.set((w - pw) / 2f, top, (w + pw) / 2f, top + ph);
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(0xD91C1C1E);
-        c.drawRoundRect(pillRect, ph / 2f, ph / 2f, paint);
+        if (settings.glass) {
+            liquid.card(c, new RectF(pillRect), ph / 2f, System.currentTimeMillis());
+        } else {
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0xD91C1C1E);
+            c.drawRoundRect(pillRect, ph / 2f, ph / 2f, paint);
+        }
         float art = ph - 8 * d;
         rf.set(pillRect.left + 4 * d, pillRect.top + 4 * d, pillRect.left + 4 * d + art, pillRect.top + 4 * d + art);
         if (nowPlaying.art != null) {
@@ -661,7 +910,6 @@ public class StandByView extends View implements SensorEventListener {
         float grow = Math.min(1f, t / 0.55f);
         float ease = 1f - (1f - grow) * (1f - grow) * (1f - grow);
         float pct = Math.max(1, batteryPct) / 100f;
-        // pulse rings
         paint.setStyle(Paint.Style.STROKE);
         for (int i = 0; i < 2; i++) {
             float pt = ((t * 1.6f) + i * 0.5f) % 1f;
@@ -760,7 +1008,7 @@ public class StandByView extends View implements SensorEventListener {
         float bw = (pw - 44 * d - bgap * 2) / 3f;
         float bx = panel.left + 22 * d;
         btnNight.set(bx, y, bx + bw, y + bh);
-        pill(c, btnNight, "Night mode: " + (settings.nightAuto ? "Auto" : "Off"), 0xFF3A3A3C, 0xFFFFFFFF);
+        pill(c, btnNight, "Liquid Glass: " + (settings.glass ? "On" : "Off"), 0xFF3A3A3C, 0xFFFFFFFF);
         bx += bw + bgap;
         btnSettings.set(bx, y, bx + bw, y + bh);
         pill(c, btnSettings, "All settings", 0xFF3A3A3C, 0xFFFFFFFF);
@@ -787,11 +1035,11 @@ public class StandByView extends View implements SensorEventListener {
         c.drawText("Welcome to StandBy", x, y, paint);
 
         String[] lines = {
-                "↔  Swipe left / right:  Widgets · Photos · Clock",
-                "↕  Swipe up / down:  change a widget, photo or clock face (13 faces)",
-                "☝  Long-press:  colours, night mode and All settings",
-                "⚙  Settings:  brightness, always-on, layout, wallpapers, Spotify, Pomodoro",
-                "🌙  Dark room:  everything turns dim red automatically",
+                "↔  Swipe left / right:  Widgets · Clock",
+                "↕  Swipe up / down:  change a widget or clock face",
+                "☝  Long-press:  colours, Liquid Glass and All settings",
+                "✦  Double-tap:  dim or brighten",
+                "⚙  Quick Settings tiles:  “Liquid Glass” and “StandBy”",
                 "⚡  Auto-start:  pick StandBy as your Screen saver (while charging)",
         };
         paint.setTypeface(Ui.REGULAR);
@@ -808,11 +1056,10 @@ public class StandByView extends View implements SensorEventListener {
         float bw = (pw - 52 * d - 2 * gap) / 3f;
         float by = panel.bottom - bh - 20 * d;
         helpAuto.set(x, by, x + bw, by + bh);
-        helpPhotos.set(x + bw + gap, by, x + 2 * bw + gap, by + bh);
+        helpSettings.set(x + bw + gap, by, x + 2 * bw + gap, by + bh);
         helpOk.set(x + 2 * (bw + gap), by, x + 3 * bw + 2 * gap, by + bh);
         pill(c, helpAuto, "Set up auto-start", 0xFF0A84FF, 0xFFFFFFFF);
-        pill(c, helpPhotos, PhotoSlideshow.hasPermission(getContext()) ? "Photos allowed ✓"
-                : "Allow photos", 0xFF3A3A3C, 0xFFFFFFFF);
+        pill(c, helpSettings, "Open settings", 0xFF3A3A3C, 0xFFFFFFFF);
         pill(c, helpOk, "Got it", 0xFFFFFFFF, 0xFF000000);
     }
 
@@ -822,9 +1069,18 @@ public class StandByView extends View implements SensorEventListener {
     public boolean onTouchEvent(MotionEvent e) {
         float x = e.getX(), y = e.getY();
         long t = e.getEventTime();
+        long now = System.currentTimeMillis();
         int w = Math.max(1, getWidth()), h = Math.max(1, getHeight());
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
+                lastTouchAt = now;
+                // Bedside / sleep: the first touch just wakes the normal view for a minute.
+                swallowTouch = bedsideActive || sleepActive;
+                if (swallowTouch) {
+                    nightWakeUntil = now + WAKE_FROM_NIGHT_MS;
+                    invalidate();
+                    return true;
+                }
                 downX = lastX = x;
                 downY = lastY = y;
                 lastT = t;
@@ -835,6 +1091,7 @@ public class StandByView extends View implements SensorEventListener {
                 return true;
             }
             case MotionEvent.ACTION_MOVE: {
+                if (swallowTouch) return true;
                 if (t > lastT) {
                     float ivx = (x - lastX) / (t - lastT);
                     float ivy = (y - lastY) / (t - lastT);
@@ -851,8 +1108,10 @@ public class StandByView extends View implements SensorEventListener {
                         dragMode = DRAG_IGNORE;
                     } else if (Math.abs(dx) > Math.abs(dy)) {
                         dragMode = DRAG_H;
+                        autoSwitched = false;
                     } else {
                         dragMode = DRAG_V;
+                        autoSwitched = false;
                         beginVertical(w, h);
                     }
                 }
@@ -871,8 +1130,11 @@ public class StandByView extends View implements SensorEventListener {
             }
             case MotionEvent.ACTION_UP: {
                 removeCallbacks(longPress);
+                if (swallowTouch) {
+                    swallowTouch = false;
+                    return true;
+                }
                 float dx = x - downX, dy = y - downY;
-                long now = System.currentTimeMillis();
                 if (longPressFired) {
                     // ignore the release of the long-press
                 } else if (dragMode == DRAG_H) {
@@ -880,6 +1142,7 @@ public class StandByView extends View implements SensorEventListener {
                     int last = settings.pages.length - 1;
                     if (dx < -w * 0.15f || velX < -0.6f) np = Math.min(last, page + 1);
                     else if (dx > w * 0.15f || velX > 0.6f) np = Math.max(0, page - 1);
+                    pageVel = -velX * 1000f / w; // carry the fling into the spring
                     setPage(np);
                 } else if (dragMode == DRAG_V) {
                     endVertical(dy, h, now);
@@ -892,6 +1155,7 @@ public class StandByView extends View implements SensorEventListener {
             }
             case MotionEvent.ACTION_CANCEL: {
                 removeCallbacks(longPress);
+                swallowTouch = false;
                 dragMode = DRAG_NONE;
                 invalidate();
                 return true;
@@ -943,10 +1207,13 @@ public class StandByView extends View implements SensorEventListener {
         if (vTarget == VT_STACK0 || vTarget == VT_STACK1) {
             int s = vTarget;
             stackIdx[s] += step;
+            float pitch = cards[s].height() + 14 * d;
+            stackVel[s] = -velY * 1000f / Math.max(1f, pitch);
             stackDotsUntil[s] = now + 1500;
             settings.sp.edit().putInt("stack" + s, Math.floorMod(stackIdx[s], settings.stacks[s].length)).apply();
         } else if (vTarget == VT_FACE) {
             faceIdx += step;
+            faceVel = -velY * 1000f / h;
             faceDotsUntil = now + 1500;
             settings.sp.edit().putInt("faceIndex", Math.floorMod(faceIdx, settings.faces.length)).apply();
         } else if (vTarget == VT_PHOTO && step != 0) {
@@ -965,8 +1232,10 @@ public class StandByView extends View implements SensorEventListener {
         if (showHelp) {
             if (helpAuto.contains(x, y)) {
                 host.openDreamSettings();
-            } else if (helpPhotos.contains(x, y)) {
-                if (!PhotoSlideshow.hasPermission(getContext())) host.requestPhotoPermission();
+            } else if (helpSettings.contains(x, y)) {
+                showHelp = false;
+                settings.sp.edit().putBoolean("helpSeen", true).apply();
+                host.openSettings();
             } else if (helpOk.contains(x, y)) {
                 showHelp = false;
                 settings.sp.edit().putBoolean("helpSeen", true).apply();
@@ -986,8 +1255,7 @@ public class StandByView extends View implements SensorEventListener {
                 }
             }
             if (btnNight.contains(x, y)) {
-                settings.putBool("nightAuto", !settings.nightAuto);
-                updateNight();
+                settings.putBool("glass", !settings.glass);
             } else if (btnSettings.contains(x, y)) {
                 showCustomize = false;
                 host.openSettings();
@@ -1003,15 +1271,13 @@ public class StandByView extends View implements SensorEventListener {
         int type = pageType(page);
         if (type == PAGE_CLOCK) {
             if (pillRect.contains(x, y)) {
-                int[] list = settings.faces;
-                for (int i = 0; i < list.length; i++) {
-                    if (list[i] == ClockFaces.NOW_PLAYING) {
-                        faceIdx = i;
-                        faceDotsUntil = now + 1500;
-                        return;
-                    }
+                int fi = faceIndexOf(ClockFaces.NOW_PLAYING);
+                if (fi >= 0) {
+                    faceIdx = fi;
+                    faceDotsUntil = now + 1500;
+                } else {
+                    nowPlaying.playPause();
                 }
-                nowPlaying.playPause();
                 return;
             }
             int face = currentFace();
@@ -1036,6 +1302,20 @@ public class StandByView extends View implements SensorEventListener {
                     if (hits[1].contains(x, y)) { nowPlaying.playPause(); return; }
                     if (hits[2].contains(x, y)) { nowPlaying.next(); return; }
                 }
+                if (wt == Widgets.UP_NEXT && agenda.joinHits[s].contains(x, y)) {
+                    String url = agenda.joinUrls[s];
+                    if (Agenda.isSafeJoinUrl(url)) host.openUrl(url);
+                    return;
+                }
+                if (wt == Widgets.TODO) {
+                    boolean[] add = {false};
+                    if (todo.onTap(s, x, y, add)) {
+                        if (add[0]) host.openTodo();
+                        else if (hideDetails()) host.openTodo(); // locked: unlock first via the editor
+                        invalidate();
+                        return;
+                    }
+                }
             }
         } else if (type == PAGE_PHOTOS) {
             if (!PhotoSlideshow.hasPermission(getContext()) && host.isActivity()
@@ -1044,6 +1324,17 @@ public class StandByView extends View implements SensorEventListener {
                 return;
             }
         }
+        // empty tap: double-tap toggles dimming
+        if (settings.doubleTapDim && now - lastEmptyTapAt < 350
+                && Math.hypot(x - lastEmptyTapX, y - lastEmptyTapY) < 60 * d) {
+            manualDim = !manualDim;
+            lastEmptyTapAt = 0;
+            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK);
+            return;
+        }
+        lastEmptyTapAt = now;
+        lastEmptyTapX = x;
+        lastEmptyTapY = y;
         pageDotsUntil = now + 2000;
     }
 }
