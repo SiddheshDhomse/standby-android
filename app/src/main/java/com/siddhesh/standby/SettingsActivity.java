@@ -354,6 +354,8 @@ public class SettingsActivity extends Activity {
             String which = s.calendarIds.isEmpty() ? "all calendars" : "selected calendars";
             button("Choose calendars (now: " + which + ")", this::pickCalendars);
         }
+        toggle("Only today's events", "Hide tomorrow's meetings; the widget shows \u201CTODAY\u201D",
+                s.calendarTodayOnly, "calTodayOnly");
         toggle("Hide details when locked", "Shows \u201CTeams meeting\u201D and task counts instead of titles",
                 s.hideDetailsLocked, "hideDetailsLocked");
         note("Teams meetings live in your work Outlook calendar. Install Outlook, sign in with your work account, "

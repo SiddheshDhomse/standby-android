@@ -182,7 +182,7 @@ public class StandByView extends View implements SensorEventListener {
         } else {
             settings.load();
             clampIndices();
-            if (key.equals("calendarIds")) agenda.invalidateCache();
+            if (key.equals("calendarIds") || key.equals("calTodayOnly")) agenda.invalidateCache();
             lastBrightness = -2f;
             keepOnKnown = false;
         }

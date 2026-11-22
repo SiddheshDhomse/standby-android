@@ -61,6 +61,7 @@ final class Settings {
     String weatherCity;
     float weatherLat, weatherLon;
     String calendarIds;  // "" = all calendars
+    boolean calendarTodayOnly;
 
     Settings(Context c) {
         sp = c.getSharedPreferences(FILE, Context.MODE_PRIVATE);
@@ -119,6 +120,7 @@ final class Settings {
         weatherLat = sp.getFloat("weatherLat", Float.NaN);
         weatherLon = sp.getFloat("weatherLon", Float.NaN);
         calendarIds = sp.getString("calendarIds", "");
+        calendarTodayOnly = sp.getBoolean("calTodayOnly", false);
     }
 
     void putInt(String k, int v) {
