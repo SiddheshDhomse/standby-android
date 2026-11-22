@@ -52,6 +52,7 @@ final class Agenda {
     private final float d;
     private volatile boolean busy;
     private long lastQuery;
+    private boolean todayOnlyShown;
     List<Event> events = new ArrayList<>();
     final RectF[] joinHits = {new RectF(), new RectF()};
     String[] joinUrls = new String[2];
@@ -76,8 +77,10 @@ final class Agenda {
         lastQuery = now;
         busy = true;
         final String ids = s.calendarIds;
+        final boolean todayOnly = s.calendarTodayOnly;
+        todayOnlyShown = todayOnly;
         new Thread(() -> {
-            List<Event> list = query(ids);
+            List<Event> list = query(ids, todayOnly);
             main.post(() -> {
                 busy = false;
                 events = list;
@@ -86,12 +89,20 @@ final class Agenda {
         }, "agenda").start();
     }
 
-    private List<Event> query(String ids) {
+    private List<Event> query(String ids, boolean todayOnly) {
         List<Event> out = new ArrayList<>();
         long now = System.currentTimeMillis();
+        Calendar endOfDay = Calendar.getInstance();
+        endOfDay.set(Calendar.HOUR_OF_DAY, 0);
+        endOfDay.set(Calendar.MINUTE, 0);
+        endOfDay.set(Calendar.SECOND, 0);
+        endOfDay.set(Calendar.MILLISECOND, 0);
+        endOfDay.add(Calendar.DAY_OF_MONTH, 1);
+        long rangeEnd = todayOnly ? endOfDay.getTimeInMillis() : now + 48 * 3600_000L;
+        Calendar today = Calendar.getInstance();
         Uri.Builder b = CalendarContract.Instances.CONTENT_URI.buildUpon();
-        ContentUris.appendId(b, now - 12 * 3600_000L);
-        ContentUris.appendId(b, now + 48 * 3600_000L);
+        ContentUris.appendId(b, now - 36 * 3600_000L);
+        ContentUris.appendId(b, rangeEnd);
         String[] proj = {
                 CalendarContract.Instances.TITLE, CalendarContract.Instances.BEGIN, CalendarContract.Instances.END,
                 CalendarContract.Instances.ALL_DAY, CalendarContract.Instances.DISPLAY_COLOR,
@@ -128,6 +139,17 @@ final class Agenda {
                 e.begin = c.getLong(1);
                 e.end = c.getLong(2);
                 e.allDay = c.getInt(3) == 1;
+                if (todayOnly) {
+                    if (e.allDay) {
+                        // all-day events are stored as UTC dates
+                        Calendar u = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
+                        u.setTimeInMillis(e.begin);
+                        if (u.get(Calendar.YEAR) != today.get(Calendar.YEAR)
+                                || u.get(Calendar.DAY_OF_YEAR) != today.get(Calendar.DAY_OF_YEAR)) continue;
+                    } else if (e.begin >= rangeEnd) {
+                        continue;
+                    }
+                }
                 e.color = c.getInt(4) | 0xFF000000;
                 String loc = c.getString(5), desc = c.getString(6);
                 e.joinUrl = findTeams(loc);
@@ -208,14 +230,14 @@ final class Agenda {
         p.setTypeface(Ui.BOLD);
         p.setColor(accent);
         p.setTextSize(r.height() * 0.055f);
-        c.drawText("UP NEXT", r.left + pad, r.top + pad + p.getTextSize(), p);
+        c.drawText(todayOnlyShown ? "TODAY" : "UP NEXT", r.left + pad, r.top + pad + p.getTextSize(), p);
 
         if (!hasPermission(ctx)) {
             msg(c, r, "Allow calendar access in StandBy Settings");
             return;
         }
         if (events.isEmpty()) {
-            msg(c, r, "Nothing else on your calendar");
+            msg(c, r, todayOnlyShown ? "Nothing else today" : "Nothing else on your calendar");
             return;
         }
         Event e = events.get(0);
