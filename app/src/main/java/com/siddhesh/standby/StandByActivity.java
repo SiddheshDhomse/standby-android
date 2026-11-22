@@ -69,10 +69,18 @@ public class StandByActivity extends Activity implements StandByView.Host {
     // ---------------------------------------------------------------- Host
 
     @Override
-    public void setNight(boolean night) {
+    public void setBrightness(float level) {
         WindowManager.LayoutParams lp = getWindow().getAttributes();
-        lp.screenBrightness = night ? 0.02f : WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
-        getWindow().setAttributes(lp);
+        float v = level < 0 ? WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE : Math.max(0.01f, Math.min(1f, level));
+        if (lp.screenBrightness != v) {
+            lp.screenBrightness = v;
+            getWindow().setAttributes(lp);
+        }
+    }
+
+    @Override
+    public void openSettings() {
+        startActivity(new Intent(this, SettingsActivity.class));
     }
 
     @Override

@@ -14,7 +14,13 @@ import java.util.TimeZone;
 
 /** The widgets shown in the two side-by-side stacks of the Widgets view. */
 final class Widgets {
-    static final int ANALOG = 0, DIGITAL = 1, WORLD = 2, CALENDAR = 3, BATTERY = 4, DATE = 5;
+    static final int ANALOG = 0, DIGITAL = 1, WORLD = 2, CALENDAR = 3, BATTERY = 4, DATE = 5,
+            NOW_PLAYING = 6, POMODORO = 7, COUNT = 8;
+    static final String[] NAMES = {"Analog clock", "Digital clock", "World clock", "Calendar",
+            "Battery", "Date & next alarm", "Now Playing (Spotify)", "Pomodoro timer"};
+
+    /** Now Playing controls per stack: [stack][prev, play, next]. */
+    final RectF[][] npHits = {{new RectF(), new RectF(), new RectF()}, {new RectF(), new RectF(), new RectF()}};
 
     static final String[][] CITIES = {
             {"Cupertino", "America/Los_Angeles"},
@@ -37,7 +43,7 @@ final class Widgets {
         d = density;
     }
 
-    void draw(Canvas c, int type, RectF r, Calendar cal, StandByView v) {
+    void draw(Canvas c, int type, RectF r, Calendar cal, StandByView v, int stack, long now) {
         p.setShader(null);
         p.setStyle(Paint.Style.FILL);
         p.setTextAlign(Paint.Align.LEFT);
@@ -49,6 +55,8 @@ final class Widgets {
             case CALENDAR: calendar(c, r, cal, accent); break;
             case BATTERY: battery(c, r, accent, v); break;
             case DATE: date(c, r, cal, accent, v); break;
+            case NOW_PLAYING: nowPlaying(c, r, v, stack); break;
+            case POMODORO: v.pomodoro.drawWidget(c, r, now, v.settings); break;
         }
     }
 
@@ -220,7 +228,7 @@ final class Widgets {
         float bolt = charging ? p.getTextSize() * 0.9f : 0f;
         float startX = cx - (tw + bolt * 1.2f) / 2f;
         if (charging) {
-            drawBolt(c, startX, sy - bolt / 2f, bolt, Ui.GREEN);
+            Icons.bolt(c, p, path, startX, sy - bolt / 2f, bolt, Ui.GREEN);
         }
         p.setColor(0xFFFFFFFF);
         p.setTextAlign(Paint.Align.LEFT);
@@ -236,19 +244,6 @@ final class Widgets {
             Ui.textCenter(c, p, t, cx, r.top + r.height() * 0.90f, tmp);
         }
         p.setTextAlign(Paint.Align.LEFT);
-    }
-
-    private void drawBolt(Canvas c, float x, float y, float s, int color) {
-        path.reset();
-        path.moveTo(x + 0.60f * s, y);
-        path.lineTo(x + 0.08f * s, y + 0.58f * s);
-        path.lineTo(x + 0.45f * s, y + 0.58f * s);
-        path.lineTo(x + 0.35f * s, y + s);
-        path.lineTo(x + 0.92f * s, y + 0.40f * s);
-        path.lineTo(x + 0.55f * s, y + 0.40f * s);
-        path.close();
-        p.setColor(color);
-        c.drawPath(path, p);
     }
 
     private void date(Canvas c, RectF r, Calendar cal, int accent, StandByView v) {
@@ -279,5 +274,87 @@ final class Widgets {
         Ui.fitWidth(p, line, r.width() * 0.8f, r.height() * 0.06f);
         Ui.textCenter(c, p, line, cx, r.top + r.height() * 0.87f, tmp);
         p.setTextAlign(Paint.Align.LEFT);
+    }
+
+    private void nowPlaying(Canvas c, RectF r, StandByView v, int stack) {
+        NowPlaying np = v.nowPlaying;
+        RectF[] hits = npHits[stack];
+        for (RectF h : hits) h.setEmpty();
+        float pad = 22 * d;
+        p.setTextAlign(Paint.Align.LEFT);
+        if (!np.active()) {
+            p.setTypeface(Ui.BOLD);
+            p.setColor(0xFF1DB954);
+            p.setTextSize(r.height() * 0.07f);
+            c.drawText("NOW PLAYING", r.left + pad, r.top + pad + p.getTextSize(), p);
+            String msg = NowPlaying.hasAccess(v.getContext()) ? "Nothing playing"
+                    : "Allow notification access in Settings";
+            p.setTypeface(Ui.MEDIUM);
+            p.setColor(Ui.GRAY);
+            Ui.fitWidth(p, msg, r.width() - 2 * pad, r.height() * 0.065f);
+            Ui.textCenter(c, p, msg, r.centerX(), r.centerY(), tmp);
+            p.setTextAlign(Paint.Align.LEFT);
+            return;
+        }
+        float artS = Math.min(r.width() * 0.42f, r.height() * 0.42f);
+        rf.set(r.left + pad, r.top + pad, r.left + pad + artS, r.top + pad + artS);
+        if (np.art != null) {
+            c.save();
+            path.reset();
+            path.addRoundRect(rf, artS * 0.08f, artS * 0.08f, Path.Direction.CW);
+            c.clipPath(path);
+            android.graphics.Matrix m = new android.graphics.Matrix();
+            float s = Math.max(artS / np.art.getWidth(), artS / np.art.getHeight());
+            m.setScale(s, s);
+            m.postTranslate(rf.left, rf.top);
+            c.drawBitmap(np.art, m, p);
+            c.restore();
+        } else {
+            p.setColor(0xFF2C2C2E);
+            c.drawRoundRect(rf, artS * 0.08f, artS * 0.08f, p);
+        }
+        p.setTypeface(Ui.BOLD);
+        p.setColor(NowPlaying.SPOTIFY.equals(np.pkg) ? 0xFF1DB954 : Ui.GRAY);
+        p.setTextSize(r.height() * 0.055f);
+        c.drawText(np.appLabel().toUpperCase(Locale.US), rf.right + 14 * d, rf.top + p.getTextSize(), p);
+
+        float ty = rf.bottom + r.height() * 0.11f;
+        float tw = r.width() - 2 * pad;
+        p.setTypeface(Ui.BOLD);
+        p.setColor(0xFFFFFFFF);
+        p.setTextSize(r.height() * 0.075f);
+        c.drawText(clip(np.title == null ? "" : np.title, tw), r.left + pad, ty, p);
+        p.setTypeface(Ui.REGULAR);
+        p.setColor(Ui.GRAY);
+        p.setTextSize(r.height() * 0.06f);
+        c.drawText(clip(np.artist == null ? "" : np.artist, tw), r.left + pad, ty + r.height() * 0.08f, p);
+
+        float py = ty + r.height() * 0.14f;
+        float fr = np.duration > 0 ? np.position() / (float) np.duration : 0f;
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        p.setStrokeWidth(4 * d);
+        p.setColor(0x44FFFFFF);
+        c.drawLine(r.left + pad, py, r.right - pad, py, p);
+        p.setColor(0xFFFFFFFF);
+        if (fr > 0) c.drawLine(r.left + pad, py, r.left + pad + tw * fr, py, p);
+        p.setStyle(Paint.Style.FILL);
+
+        float cs = Math.min(r.height() * 0.13f, r.width() * 0.2f);
+        float cy = Math.min(r.bottom - pad - cs / 2, py + r.height() * 0.13f);
+        float cx = r.centerX();
+        hits[0].set(cx - cs * 2.4f, cy - cs / 2, cx - cs * 0.9f, cy + cs / 2);
+        hits[1].set(cx - cs * 0.7f, cy - cs / 2, cx + cs * 0.7f, cy + cs / 2);
+        hits[2].set(cx + cs * 0.9f, cy - cs / 2, cx + cs * 2.4f, cy + cs / 2);
+        Icons.prev(c, p, path, hits[0], 0xFFFFFFFF);
+        Icons.playPause(c, p, path, hits[1], np.playing, 0xFFFFFFFF);
+        Icons.next(c, p, path, hits[2], 0xFFFFFFFF);
+    }
+
+    private String clip(String s, float maxW) {
+        if (p.measureText(s) <= maxW) return s;
+        int n = s.length();
+        while (n > 1 && p.measureText(s, 0, n) + p.measureText("\u2026") > maxW) n--;
+        return s.substring(0, n) + "\u2026";
     }
 }
