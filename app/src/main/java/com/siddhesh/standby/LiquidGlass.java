@@ -86,6 +86,26 @@ final class LiquidGlass {
     private int used;
     private boolean shaderBroken;
 
+    // user-tunable look (Settings › Glass & wallpaper)
+    private float glassBlurPx, bgBlurPx = -1f, lensPx;
+    private int frostAlpha, rimPct, tintColor;
+    private RenderEffect bgBlurEffect;
+    private float lastBgBlur = -2f;
+    private final Paint bmpPaint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+
+    void configure(Settings s) {
+        float gb = s.glassBlur / 100f * 44f * d;
+        if (gb != glassBlurPx) {
+            glassBlurPx = gb;
+            blur = gb > 0.5f ? RenderEffect.createBlurEffect(gb, gb, Shader.TileMode.CLAMP) : null;
+        }
+        lensPx = s.glassRefr / 100f * 30f * d;
+        frostAlpha = Math.round(s.glassFrost / 100f * 90f);
+        rimPct = s.glassRim;
+        tintColor = Settings.TINT_COLORS[s.glassTint];
+        bgBlurPx = s.bgBlur / 100f * 40f * d;
+    }
+
     LiquidGlass(float density) {
         d = density;
         shadow.setStyle(Paint.Style.FILL);
@@ -135,21 +155,50 @@ final class LiquidGlass {
         out[1] = mv[Matrix.MTRANS_Y];
     }
 
-    /** Draws the moving background and remembers it for the glass panels drawn after it. */
-    void drawBackground(Canvas c, int w, int h, long now, int palette) {
+    /** True when the background moves (needs ~25 fps). */
+    static boolean animated(Settings s) {
+        return s.bgSource == Settings.BG_FLOW;
+    }
+
+    private void paintSource(Canvas c, int w, int h, long now, Settings s, android.graphics.Bitmap wall) {
+        if (s.bgSource == Settings.BG_WALLPAPER && wall != null) {
+            float bw = wall.getWidth(), bh = wall.getHeight();
+            float sc = Math.max(w / bw, h / bh);
+            mtx.setScale(sc, sc);
+            mtx.postTranslate((w - bw * sc) / 2f, (h - bh * sc) / 2f);
+            c.drawColor(0xFF000000);
+            c.drawBitmap(wall, mtx, bmpPaint);
+        } else if (s.bgSource == Settings.BG_BLACK || s.bgSource == Settings.BG_WALLPAPER) {
+            c.drawColor(0xFF000000);
+        } else {
+            paintBackground(c, w, h, now, s.glassPalette);
+        }
+    }
+
+    /**
+     * Draws the page background (flowing colours, wallpaper or black, blurred and darkened as set)
+     * and remembers it for the glass panels drawn after it.
+     */
+    void drawBackground(Canvas c, int w, int h, long now, Settings s, android.graphics.Bitmap wall) {
+        configure(s);
         ready = false;
         used = 0;
+        int dimA = s.bgSource == Settings.BG_BLACK ? 0 : Math.round(s.wallpaperDim * 2.55f);
         if (supported() && c.isHardwareAccelerated() && w > 0 && h > 0) {
             if (bgNode == null) bgNode = new RenderNode("glass-bg");
             if (nodeW != w || nodeH != h) {
                 nodeW = w;
                 nodeH = h;
                 bgNode.setPosition(0, 0, w, h);
-                float r = 28 * d;
-                blur = RenderEffect.createBlurEffect(r, r, Shader.TileMode.CLAMP);
+            }
+            if (bgBlurPx != lastBgBlur) {
+                lastBgBlur = bgBlurPx;
+                bgNode.setRenderEffect(bgBlurPx > 0.5f
+                        ? RenderEffect.createBlurEffect(bgBlurPx, bgBlurPx, Shader.TileMode.CLAMP) : null);
             }
             RecordingCanvas rc = bgNode.beginRecording(w, h);
-            paintBackground(rc, w, h, now, palette);
+            paintSource(rc, w, h, now, s, wall);
+            if (dimA > 0) rc.drawColor(Ui.alpha(0xFF000000, dimA));
             bgNode.endRecording();
             c.drawRenderNode(bgNode);
             float[] t = new float[2];
@@ -158,7 +207,8 @@ final class LiquidGlass {
             bgTy = t[1];
             ready = true;
         } else {
-            paintBackground(c, w, h, now, palette);
+            paintSource(c, w, h, now, s, wall);
+            if (dimA > 0) c.drawColor(Ui.alpha(0xFF000000, dimA));
         }
     }
 
@@ -176,6 +226,7 @@ final class LiquidGlass {
     /** A glass panel. Call after drawBackground() during the same frame. */
     void card(Canvas c, RectF r, float radius, long now) {
         radius = Math.min(radius, Math.min(r.width(), r.height()) / 2f);
+        if (rimPct < 0) rimPct = 60;
         path.reset();
         path.addRoundRect(r, radius, radius, Path.Direction.CW);
 
@@ -207,7 +258,7 @@ final class LiquidGlass {
             rc.drawRenderNode(bgNode);
             n.endRecording();
             RenderEffect effect = blur;
-            if (lensSupported() && !shaderBroken) {
+            if (lensSupported() && !shaderBroken && lensPx > 0.5f) {
                 try {
                     RuntimeShader s = shaders.get(idx);
                     if (s == null) {
@@ -216,15 +267,15 @@ final class LiquidGlass {
                     }
                     s.setFloatUniform("box", r.left + dx - nl, r.top + dy - nt, r.right + dx - nl, r.bottom + dy - nt);
                     s.setFloatUniform("radius", radius);
-                    s.setFloatUniform("strength", Math.min(18 * d, Math.min(r.width(), r.height()) * 0.12f));
+                    s.setFloatUniform("strength", Math.min(lensPx, Math.min(r.width(), r.height()) * 0.2f));
                     s.setFloatUniform("band", Math.min(radius * 1.3f, 34 * d));
-                    effect = RenderEffect.createChainEffect(
-                            RenderEffect.createRuntimeShaderEffect(s, "content"), blur);
+                    RenderEffect lens = RenderEffect.createRuntimeShaderEffect(s, "content");
+                    effect = blur == null ? lens : RenderEffect.createChainEffect(lens, blur);
                 } catch (Throwable e) {
                     shaderBroken = true; // fall back to blur only
                 }
             }
-            n.setRenderEffect(effect);
+            n.setRenderEffect(effect); // may be null: clear glass
             c.translate(-dx, -dy);
             c.drawRenderNode(n);
             c.translate(dx, dy);
@@ -234,11 +285,17 @@ final class LiquidGlass {
             p.setColor(0x33FFFFFF);
             c.drawRect(r, p);
         }
-        // thin frost + a soft highlight across the top
+        // frost + optional tint + a soft highlight across the top
         p.setShader(null);
         p.setStyle(Paint.Style.FILL);
-        p.setColor(0x0AFFFFFF);
-        c.drawRect(r, p);
+        if (frostAlpha > 0) {
+            p.setColor(Ui.alpha(0xFFFFFFFF, frostAlpha));
+            c.drawRect(r, p);
+        }
+        if (tintColor != 0) {
+            p.setColor(Ui.alpha(tintColor, 40));
+            c.drawRect(r, p);
+        }
         p.setShader(new LinearGradient(0, r.top, 0, r.top + r.height() * 0.5f,
                 0x22FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
         c.drawRect(r, p);
@@ -250,8 +307,10 @@ final class LiquidGlass {
         float lx = (float) Math.cos(a) * r.width() / 2f, ly = (float) Math.sin(a) * r.height() / 2f - r.height() / 2f;
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeWidth(Math.max(1f, 1.4f * d));
+        float k = rimPct / 60f;
         p.setShader(new LinearGradient(cx + lx, cy + ly, cx - lx, cy - ly * 0.2f,
-                new int[]{0xE6FFFFFF, 0x40FFFFFF, 0x18FFFFFF, 0x70FFFFFF},
+                new int[]{Ui.alpha(0xFFFFFFFF, Math.round(230 * k)), Ui.alpha(0xFFFFFFFF, Math.round(64 * k)),
+                        Ui.alpha(0xFFFFFFFF, Math.round(24 * k)), Ui.alpha(0xFFFFFFFF, Math.round(112 * k))},
                 new float[]{0f, 0.35f, 0.7f, 1f}, Shader.TileMode.CLAMP));
         float in = p.getStrokeWidth() / 2f;
         rf.set(r.left + in, r.top + in, r.right - in, r.bottom - in);
@@ -259,7 +318,7 @@ final class LiquidGlass {
         // inner glow for thickness
         p.setStrokeWidth(Math.max(1f, 3f * d));
         p.setShader(new LinearGradient(0, r.top, 0, r.bottom,
-                0x26FFFFFF, 0x08FFFFFF, Shader.TileMode.CLAMP));
+                Ui.alpha(0xFFFFFFFF, Math.round(38 * k)), Ui.alpha(0xFFFFFFFF, Math.round(8 * k)), Shader.TileMode.CLAMP));
         float in2 = 2.8f * d;
         rf.set(r.left + in2, r.top + in2, r.right - in2, r.bottom - in2);
         c.drawRoundRect(rf, Math.max(0, radius - in2), Math.max(0, radius - in2), p);

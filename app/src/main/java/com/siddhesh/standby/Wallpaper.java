@@ -75,24 +75,54 @@ final class Wallpaper {
         return bmp;
     }
 
+    static File ownFile(Context c) {
+        return new File(c.getFilesDir(), "own_wallpaper.jpg");
+    }
+
+    private long loadedOwnVersion = -1;
+
     /** Call often (cheap). Loads the cached image or downloads a new one when due. */
-    void ensure(Settings s) {
-        if (s.wallpaperSource == Settings.WP_NONE) {
+    void ensure(int source, int intervalIdx) {
+        if (source == Settings.WP_NONE) {
             bmp = null;
             loadedSource = -1;
             return;
         }
         if (busy) return;
+        if (source == Settings.WP_OWN) {
+            long ver = sp.getLong("own_wp_ver", 0);
+            if (loadedSource == Settings.WP_OWN && loadedOwnVersion == ver) return;
+            File f = ownFile(ctx);
+            if (!f.exists()) {
+                bmp = null;
+                loadedSource = Settings.WP_OWN;
+                loadedOwnVersion = ver;
+                return;
+            }
+            busy = true;
+            final int target = targetSize;
+            exec.execute(() -> {
+                Bitmap b = decodeFile(f, target);
+                main.post(() -> {
+                    busy = false;
+                    bmp = b;
+                    loadedSource = Settings.WP_OWN;
+                    loadedOwnVersion = ver;
+                    onChange.run();
+                });
+            });
+            return;
+        }
         long now = System.currentTimeMillis();
-        boolean sameSource = sp.getInt("wp_cachedSource", -1) == s.wallpaperSource;
+        boolean sameSource = sp.getInt("wp_cachedSource", -1) == source;
         long fetchedAt = sp.getLong("wp_fetchedAt", 0);
-        long interval = Settings.WP_MINUTES[s.wallpaperInterval] * 60_000L;
+        long interval = Settings.WP_MINUTES[Math.max(0, Math.min(Settings.WP_MINUTES.length - 1, intervalIdx))] * 60_000L;
         boolean due = !sameSource || now - fetchedAt > interval || fetchedAt > now;
 
-        if (bmp == null || loadedSource != s.wallpaperSource) {
+        if (bmp == null || loadedSource != source) {
             if (sameSource && cacheFile().exists()) {
                 busy = true;
-                final int src = s.wallpaperSource;
+                final int src = source;
                 final int target = targetSize;
                 exec.execute(() -> {
                     Bitmap b = decodeFile(cacheFile(), target);
@@ -108,10 +138,36 @@ final class Wallpaper {
                 return;
             }
         }
-        // retry downloads at most every 2 minutes (e.g. while offline)
         if (due && now - lastAttempt > 120_000) {
             lastAttempt = now;
-            download(s.wallpaperSource);
+            download(source);
+        }
+    }
+
+    /** Saves a picked image (re-encoded: strips location/EXIF) as the user's own wallpaper. Blocking. */
+    static boolean saveOwn(Context c, android.net.Uri uri) {
+        try {
+            android.graphics.ImageDecoder.Source src = android.graphics.ImageDecoder.createSource(c.getContentResolver(), uri);
+            Bitmap b = android.graphics.ImageDecoder.decodeBitmap(src, (decoder, info, source) -> {
+                int w = info.getSize().getWidth(), h = info.getSize().getHeight();
+                if ((long) w * h > 200_000_000L) throw new IllegalArgumentException("too large");
+                decoder.setTargetSampleSize(sampleSize(w, h, 2400));
+                decoder.setAllocator(android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE);
+            });
+            File tmp = new File(c.getFilesDir(), "own_wallpaper.tmp");
+            try (FileOutputStream out = new FileOutputStream(tmp)) {
+                b.compress(Bitmap.CompressFormat.JPEG, 90, out);
+                out.getFD().sync();
+            }
+            if (!tmp.renameTo(ownFile(c))) {
+                tmp.delete();
+                return false;
+            }
+            c.getSharedPreferences(Settings.FILE, Context.MODE_PRIVATE).edit()
+                    .putLong("own_wp_ver", System.currentTimeMillis()).apply();
+            return true;
+        } catch (Throwable t) {
+            return false;
         }
     }
 

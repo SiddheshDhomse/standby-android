@@ -712,18 +712,11 @@ final class ClockFaces {
 
     /** Minimal Liquid Glass: one frosted slab with a thin, quiet time. */
     private void glass(Canvas c, int w, int h, Calendar cal, long now, StandByView v) {
-        if (!v.settings.glass) {
-            // Glass look is off globally: this face still brings its own flowing background.
-            c.save();
-            c.translate(-v.driftX, -v.driftY);
-            v.liquid.drawBackground(c, w, h, now, v.settings.glassPalette);
-            c.restore();
-        }
         boolean land = w >= h;
         float sw = land ? w * 0.70f : w * 0.84f;
         float sh = land ? h * 0.58f : h * 0.36f;
         rf.set((w - sw) / 2f, (h - sh) / 2f - h * 0.03f, (w + sw) / 2f, (h + sh) / 2f - h * 0.03f);
-        v.liquid.card(c, new RectF(rf), Math.min(sh * 0.32f, 52 * d), now);
+        v.liquid.card(c, new RectF(rf), Math.min(sh * 0.45f, v.settings.glassRadius * d * 1.8f), now);
         String t = Ui.time(cal, v.h24);
         p.setTypeface(Ui.LIGHT);
         p.setColor(0xF2FFFFFF);
